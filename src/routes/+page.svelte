@@ -26,6 +26,12 @@
     import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
     import { basicSetup } from 'codemirror';
 
+    // Import Fontsource fonts
+    import '@fontsource/inter/latin-400.css'; // Regular
+    import '@fontsource/inter/latin-700.css'; // Bold
+    import '@fontsource/noto-sans-arabic/arabic-400.css'; // Regular
+    import '@fontsource/noto-sans-arabic/arabic-700.css'; // Bold
+    import '@fontsource/ibm-plex-mono/latin-400.css'; // Regular
 
     const INITIAL_MARKDOWN = `# Hello, Markdown!
   
@@ -551,9 +557,10 @@
 <!-- svelte:head must be a top-level element -->
 <svelte:head>
   <title>Markdown Editor {isReadOnly ? '(Read-Only)' : ''}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+  <!-- Remove existing Google Font links -->
+  <!-- <link rel="preconnect" href="https://fonts.googleapis.com"> -->
+  <!-- <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"> -->
+  <!-- <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&family=Roboto:wght@400;700&display=swap" rel="stylesheet"> -->
 </svelte:head>
   
 {#if isLoading}
@@ -565,7 +572,7 @@
     </svg>
   </div>
 {:else}
-  <div class="flex h-screen flex-col" dir={isRtl ? 'rtl' : 'ltr'} style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">
+  <div class="flex h-screen flex-col" dir={isRtl ? 'rtl' : 'ltr'} style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Inter'}, sans-serif;">
     {#if !isReadOnly}
       <header class="flex items-center justify-between bg-gray-800 p-4 text-white shadow-md">
         <h1 class="text-2xl font-semibold">Markdown Editor</h1>
@@ -623,22 +630,22 @@
         minRightPixels={isVerticalSplit ? 50 : 100}
         disableResizer={isReadOnly}
       >
-        <div slot="left" class="pane-a h-full w-full overflow-auto bg-white" style="{showEditorPane ? '' : 'display: none;'} font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">
+        <div slot="left" class="pane-a h-full w-full overflow-auto bg-white" style="{showEditorPane ? '' : 'display: none;'} /* Font will be inherited from parent .flex.h-screen */">
           {#if !isReadOnly && !isVerticalSplit && showEditorPane}
-             <div class="p-2 text-sm font-semibold text-gray-600 {isRtl ? 'text-right' : 'text-left'}" style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">Editor</div>
+             <div class="p-2 text-sm font-semibold text-gray-600 {isRtl ? 'text-right' : 'text-left'}" style="/* Font will be inherited */">Editor</div>
           {/if}
           <div bind:this={editorHostEl} class="codemirror-host" style="height: {( !isReadOnly && !isVerticalSplit && showEditorPane) ? 'calc(100% - 2.5rem)' : '100%'}"></div>
         </div>
         <div slot="right" class="pane-b h-full w-full overflow-auto bg-gray-50 p-1 {isVerticalSplit ? 'md:p-4' : 'md:p-6'}">
           {#if !isReadOnly && !isVerticalSplit}
-             <div class="pb-2 text-sm font-semibold text-gray-600 {isRtl ? 'text-right' : 'text-left'}" style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">Preview</div>
+             <div class="pb-2 text-sm font-semibold text-gray-600 {isRtl ? 'text-right' : 'text-left'}" style="/* Font will be inherited */">Preview</div>
           {/if}
           <div 
             bind:this={previewEl} 
             class="prose max-w-none {isRtl ? 'prose-rtl text-right' : 'text-left'} 
                    {isReadOnly && !isVerticalSplit ? 'max-w-3xl mx-auto' : ''} 
                    w-full h-full overflow-auto" 
-            style="direction: {isRtl ? 'rtl' : 'ltr'}; font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;"
+            style="direction: {isRtl ? 'rtl' : 'ltr'}; /* Font will be inherited from parent .flex.h-screen */"
           >
             {@html htmlOutput}
           </div>
@@ -661,10 +668,11 @@
 <style>
   :global(body) {
     overscroll-behavior: none; 
+    /* font-family is now set on the main layout div for better specificity with RTL toggle */
   }
 
   :global(.prose) {
-    font-family: inherit;
+    font-family: inherit; /* Will inherit from body or parent with dir attribute */
   }
   :global(.prose[dir="rtl"]) {
     direction: rtl;
@@ -701,7 +709,7 @@
   }
 
   :global(.cm-scroller) {
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace !important;
+    font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace !important;
   }
   
   /* Ensure CM content direction is respected */
@@ -738,14 +746,18 @@
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   }
 
-  :global(.prose:not([dir='rtl']) .admonition) {
+  :global([dir="ltr"] .prose .admonition) {
     border-left-width: 5px;
     border-left-style: solid;
+    border-right-width: 0;
+    border-right-style: none; /* Ensure no right border style in LTR */
   }
 
-  :global(.prose[dir='rtl'] .admonition) {
+  :global([dir="rtl"] .prose .admonition) {
     border-right-width: 5px;
     border-right-style: solid;
+    border-left-width: 0;
+    border-left-style: none; /* Ensure no left border style in RTL */
   }
 
   :global(.admonition-title) {
@@ -763,10 +775,10 @@
     margin-bottom: 0;
   }
 
-  :global(.prose:not([dir='rtl']) .admonition-note) {
+  :global([dir="ltr"] .prose .admonition-note) {
     border-left-color: #3b82f6; /* blue-500 */
   }
-  :global(.prose[dir='rtl'] .admonition-note) {
+  :global([dir="rtl"] .prose .admonition-note) {
     border-right-color: #3b82f6; /* blue-500 */
   }
   :global(.admonition-note) { /* Common background and title color */
@@ -776,10 +788,10 @@
     color: #1d4ed8; /* blue-700 */
   }
 
-  :global(.prose:not([dir='rtl']) .admonition-tip) {
+  :global([dir="ltr"] .prose .admonition-tip) {
     border-left-color: #10b981; /* green-500 */
   }
-  :global(.prose[dir='rtl'] .admonition-tip) {
+  :global([dir="rtl"] .prose .admonition-tip) {
     border-right-color: #10b981; /* green-500 */
   }
   :global(.admonition-tip) { /* Common background and title color */
@@ -789,10 +801,10 @@
     color: #047857; /* green-700 */
   }
 
-  :global(.prose:not([dir='rtl']) .admonition-important) {
+  :global([dir="ltr"] .prose .admonition-important) {
     border-left-color: #8b5cf6; /* violet-500 */
   }
-  :global(.prose[dir='rtl'] .admonition-important) {
+  :global([dir="rtl"] .prose .admonition-important) {
     border-right-color: #8b5cf6; /* violet-500 */
   }
   :global(.admonition-important) { /* Common background and title color */
@@ -802,10 +814,10 @@
     color: #6d28d9; /* violet-700 */
   }
 
-  :global(.prose:not([dir='rtl']) .admonition-warning) {
+  :global([dir="ltr"] .prose .admonition-warning) {
     border-left-color: #f97316; /* orange-500 */
   }
-  :global(.prose[dir='rtl'] .admonition-warning) {
+  :global([dir="rtl"] .prose .admonition-warning) {
     border-right-color: #f97316; /* orange-500 */
   }
   :global(.admonition-warning) { /* Common background and title color */
@@ -815,10 +827,10 @@
     color: #c2410c; /* orange-700 */
   }
 
-  :global(.prose:not([dir='rtl']) .admonition-caution) {
+  :global([dir="ltr"] .prose .admonition-caution) {
     border-left-color: #ef4444; /* red-500 */
   }
-  :global(.prose[dir='rtl'] .admonition-caution) {
+  :global([dir="rtl"] .prose .admonition-caution) {
     border-right-color: #ef4444; /* red-500 */
   }
   :global(.admonition-caution) { /* Common background and title color */
