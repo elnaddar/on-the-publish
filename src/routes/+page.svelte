@@ -3,11 +3,22 @@
     import { markedHighlight } from 'marked-highlight';
     import hljs from 'highlight.js';
     import 'highlight.js/styles/default.css'; // Default theme is bundled
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import ResizablePanes from '$lib/components/ResizablePanes.svelte';
     import ShareModal from '$lib/components/ShareModal.svelte';
     import pako from 'pako';
-  
+
+    // CodeMirror imports
+    import { EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
+    import { EditorState, StateEffect, Compartment } from '@codemirror/state';
+    import { markdown as langMarkdown, markdownKeymap } from '@codemirror/lang-markdown';
+    import { defaultKeymap, history, indentWithTab } from '@codemirror/commands';
+    import { LanguageDescription, syntaxTree } from '@codemirror/language';
+    import { languages } from '@codemirror/language-data';
+    import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
+    import { basicSetup } from 'codemirror';
+
+
     let markdownInput = `# Hello, Markdown!
   
   This is a **test**.
@@ -27,8 +38,9 @@
       }
     }));
     markedInstance.use({ pedantic: false, gfm: true, breaks: false });
-  
-    let editorEl: HTMLTextAreaElement;
+
+    let editorHostEl: HTMLDivElement;
+    let cmView: EditorView;
     let previewEl: HTMLDivElement;
     let isEditorScrolling = false;
     let isPreviewScrolling = false;
@@ -43,32 +55,62 @@
     let showShareModal = false;
     let isReadOnly = false;      
     let showEditorPaneInReadOnly = false; 
-    let isLoading = true; // New loading state
-  
-  
-    const handleScroll = (event: Event) => {
-      if (isReadOnly && !showEditorPane) return; 
-      const target = event.target as HTMLElement;
-      if (target === editorEl && !isPreviewScrolling) {
+    let isLoading = true; 
+
+    let readOnlyCompartment = new Compartment();
+    let directionCompartment = new Compartment();
+
+    const handleScroll = (event?: Event) => {
+      if (isReadOnly && !showEditorPane) return;
+    
+      const editorScroller = cmView?.scrollDOM;
+      const previewScroller = previewEl;
+    
+      if (!editorScroller || !previewScroller) return;
+    
+      const target = event?.target as HTMLElement;
+    
+      if ((target && target.contains(editorScroller) && !isPreviewScrolling) || (!event && !isPreviewScrolling)) { 
         isEditorScrolling = true;
-        const scrollPercentage = target.scrollTop / (target.scrollHeight - target.clientHeight);
-        if (previewEl.scrollHeight - previewEl.clientHeight > 0) {
-          previewEl.scrollTop = scrollPercentage * (previewEl.scrollHeight - previewEl.clientHeight);
+        const editorScrollHeight = editorScroller.scrollHeight;
+        const editorClientHeight = editorScroller.clientHeight;
+        const editorScrollTop = editorScroller.scrollTop;
+        
+        if (editorScrollHeight - editorClientHeight > 0) {
+            const scrollPercentage = editorScrollTop / (editorScrollHeight - editorClientHeight);
+            if (previewScroller.scrollHeight - previewScroller.clientHeight > 0) {
+                previewScroller.scrollTop = scrollPercentage * (previewScroller.scrollHeight - previewScroller.clientHeight);
+            }
         }
         clearTimeout(scrollTimeout);
-        scrollTimeout = window.setTimeout(() => (isEditorScrolling = false), 100);
-      } else if (target === previewEl && !isEditorScrolling) {
+        scrollTimeout = window.setTimeout(() => (isEditorScrolling = false), 150); 
+      } else if ((target && target === previewScroller && !isEditorScrolling) || (!event && !isEditorScrolling)) { 
         isPreviewScrolling = true;
-        const scrollPercentage = target.scrollTop / (target.scrollHeight - target.clientHeight);
-        if (editorEl && editorEl.scrollHeight - editorEl.clientHeight > 0) { 
-          editorEl.scrollTop = scrollPercentage * (editorEl.scrollHeight - editorEl.clientHeight);
+        const previewScrollHeight = previewScroller.scrollHeight;
+        const previewClientHeight = previewScroller.clientHeight;
+        const previewScrollTop = previewScroller.scrollTop;
+
+        if (previewScrollHeight - previewClientHeight > 0) {
+            const scrollPercentage = previewScrollTop / (previewScrollHeight - previewClientHeight);
+             if (editorScroller.scrollHeight - editorScroller.clientHeight > 0) {
+                editorScroller.scrollTop = scrollPercentage * (editorScroller.scrollHeight - editorScroller.clientHeight);
+            }
         }
         clearTimeout(scrollTimeout);
-        scrollTimeout = window.setTimeout(() => (isPreviewScrolling = false), 100);
+        scrollTimeout = window.setTimeout(() => (isPreviewScrolling = false), 150); 
       }
     };
   
-    function toggleRtl() { if (!isReadOnly) isRtl = !isRtl; }
+    function toggleRtl() { 
+      if (!isReadOnly) {
+        isRtl = !isRtl;
+        if (cmView) {
+          cmView.dispatch({ effects: directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: isRtl ? 'rtl' : 'ltr' })) });
+          editorHostEl?.classList.toggle('cm-rtl', isRtl);
+          editorHostEl?.classList.toggle('cm-ltr', !isRtl);
+        } 
+      }
+    }
   
     async function changeTheme(eventOrValue: Event | string) {
       let newTheme: string;
@@ -90,6 +132,7 @@
           link.id = 'hljs-theme-link';
           link.rel = 'stylesheet';
           link.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${newTheme}.min.css`;
+          link.crossOrigin = 'anonymous';
           document.head.appendChild(link);
         }
         currentHljsTheme = newTheme;
@@ -99,86 +142,239 @@
       }
     }
     
-    onMount(() => {
-      parseUrlHashForSharedContent(); 
-  
-      if (showEditorPane && editorEl && previewEl) { 
-        editorEl.addEventListener('scroll', handleScroll);
-        previewEl.addEventListener('scroll', handleScroll);
-      } else if (!showEditorPane && previewEl) {
-        // Preview can still scroll itself
+    function setupCodeMirror(initialContent: string, readOnlyState: boolean) {
+      if (cmView) {
+        cmView.scrollDOM.removeEventListener('scroll', handleScroll);
+        cmView.destroy();
       }
+
+      const extensions = [
+        basicSetup,
+        keymap.of([...defaultKeymap, ...markdownKeymap, ...completionKeymap, indentWithTab]),
+        langMarkdown({
+          codeLanguages: (info: string) => {
+            const found = LanguageDescription.matchLanguageName(languages, info, true);
+            return found;
+          }
+        }),
+        autocompletion(),
+        EditorView.lineWrapping,
+        cmPlaceholder("Start typing your Markdown here..."),
+        EditorView.updateListener.of(update => {
+          if (update.docChanged) {
+            markdownInput = update.state.doc.toString();
+          }
+          if (update.geometryChanged) {
+             if(!isEditorScrolling && !isPreviewScrolling){
+                handleScroll(); 
+             }
+          }
+        }),
+        readOnlyCompartment.of(EditorState.readOnly.of(readOnlyState)),
+        directionCompartment.of(EditorView.contentAttributes.of({ dir: isRtl ? 'rtl' : 'ltr' }))
+      ];
       
-      changeTheme(currentHljsTheme); 
+      const isDarkTheme = ['atom-one-dark', 'monokai', 'arta', 'vs2015'].includes(currentHljsTheme);
+      extensions.push(EditorView.theme({
+        "&": {
+          height: "100%", 
+          fontSize: "1rem",
+        },
+        ".cm-scroller": { 
+            overflow: "auto",
+            fontFamily: "monospace", 
+        },
+        ".cm-content": {
+          padding: "10px",
+        },
+        "&.cm-focused": {
+          outline: "none"
+        },
+      }, {dark: isDarkTheme}));
+
+      cmView = new EditorView({
+        state: EditorState.create({
+          doc: initialContent,
+          extensions: extensions
+        }),
+        parent: editorHostEl
+      });
+      
+      cmView.scrollDOM.addEventListener('scroll', handleScroll);
+      editorHostEl?.classList.toggle('cm-rtl', isRtl);
+      editorHostEl?.classList.toggle('cm-ltr', !isRtl);
+
+      setTimeout(() => handleScroll(), 50); 
+    }
   
-      const handleHashChange = () => {
-        parseUrlHashForSharedContent();
-        // Potentially re-apply theme and scroll listeners if content reloads affecting these
-        changeTheme(currentHljsTheme); 
-        if (showEditorPane && editorEl && previewEl) {
-            editorEl.removeEventListener('scroll', handleScroll); // Avoid duplicate listeners
-            previewEl.removeEventListener('scroll', handleScroll);
-            editorEl.addEventListener('scroll', handleScroll);
-            previewEl.addEventListener('scroll', handleScroll);
-        } else if (!showEditorPane && previewEl) {
-            // Handle scroll for preview only if necessary
+    onMount(() => {
+      let hashChangeHandler: () => Promise<void>;
+
+      const init = async () => {
+        isLoading = true;
+        await parseUrlHashForSharedContent();
+        
+        if (showEditorPane && editorHostEl) {
+          setupCodeMirror(markdownInput, isReadOnly);
         }
+        
+        if (previewEl) { 
+          previewEl.addEventListener('scroll', handleScroll);
+        }
+        
+        await changeTheme(currentHljsTheme); 
+
+        hashChangeHandler = async () => {
+          isLoading = true;
+          await parseUrlHashForSharedContent();
+          if (showEditorPane && editorHostEl) {
+            if (cmView) {
+                const currentCmReadOnly = cmView.state.facet(EditorState.readOnly);
+                const currentCmDirAttr = cmView.contentDOM.getAttribute('dir');
+                const targetDir = isRtl ? 'rtl' : 'ltr';
+                let effects: StateEffect<unknown>[] = [];
+                if (currentCmReadOnly !== isReadOnly) {
+                    effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+                }
+                if (currentCmDirAttr !== targetDir) {
+                    effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+                }
+                if (cmView.state.doc.toString() !== markdownInput) {
+                    cmView.dispatch({
+                        changes: {from: 0, to: cmView.state.doc.length, insert: markdownInput}
+                    });
+                }
+                if (effects.length > 0) {
+                    cmView.dispatch({effects});
+                }
+            } else {
+                 setupCodeMirror(markdownInput, isReadOnly);
+            }
+          } else if (!showEditorPane && cmView) {
+            cmView.scrollDOM.removeEventListener('scroll', handleScroll);
+            cmView.destroy();
+          }
+          await changeTheme(currentHljsTheme);
+          isLoading = false;
+          await tick();
+          handleScroll();
+        };
+
+        window.addEventListener('hashchange', hashChangeHandler);
+
+        isLoading = false;
+        await tick();
+        if (showEditorPane) handleScroll();
       };
 
-      window.addEventListener('hashchange', handleHashChange);
-  
-      // All setup is done, set loading to false
-      isLoading = false;
-  
+      init();
+
       return () => {
-        if (editorEl) editorEl.removeEventListener('scroll', handleScroll);
+        if (cmView) {
+            cmView.scrollDOM.removeEventListener('scroll', handleScroll);
+            cmView.destroy();
+        }
         if (previewEl) previewEl.removeEventListener('scroll', handleScroll);
         clearTimeout(scrollTimeout);
         const themeLink = document.getElementById('hljs-theme-link');
         if (themeLink) themeLink.remove();
-        window.removeEventListener('hashchange', handleHashChange);
+        if (hashChangeHandler) window.removeEventListener('hashchange', hashChangeHandler);
       };
     });
   
-    function parseUrlHashForSharedContent() {
-      if (typeof window !== 'undefined') {
-        const hash = window.location.hash;
-        if (hash.startsWith('#share=')) {
-          try {
-            const encodedData = hash.substring('#share='.length);
-            const compressedString = atob(encodedData); 
-            const compressedDataArr = new Uint8Array(compressedString.length);
-            for (let i = 0; i < compressedString.length; i++) {
-              compressedDataArr[i] = compressedString.charCodeAt(i);
-            }
-  
-            const jsonString = pako.inflate(compressedDataArr, { to: 'string' });
-            const sharedData = JSON.parse(jsonString);
-  
-            if (sharedData.markdown) markdownInput = sharedData.markdown;
-            if (sharedData.options) {
-              isRtl = sharedData.options.rtl === true;
-              if (sharedData.options.theme && availableHljsThemes.includes(sharedData.options.theme)) {
-                currentHljsTheme = sharedData.options.theme;
+    function parseUrlHashForSharedContent(): Promise<void> {
+      return new Promise<void>(async (resolve) => {
+        if (typeof window !== 'undefined') {
+          const hash = window.location.hash;
+          if (hash.startsWith('#share=')) {
+            try {
+              const encodedData = hash.substring('#share='.length);
+              const compressedString = atob(encodedData); 
+              const compressedDataArr = new Uint8Array(compressedString.length);
+              for (let i = 0; i < compressedString.length; i++) {
+                compressedDataArr[i] = compressedString.charCodeAt(i);
               }
-              if (sharedData.options.readOnly === true) {
-                isReadOnly = true;
+    
+              const jsonString = pako.inflate(compressedDataArr, { to: 'string' });
+              const sharedData = JSON.parse(jsonString);
+    
+              let newMarkdownInput = markdownInput;
+              let newIsRtl = isRtl;
+              let newCurrentHljsTheme = currentHljsTheme;
+              let newIsReadOnly = isReadOnly;
+
+              if (sharedData.markdown) newMarkdownInput = sharedData.markdown;
+              if (sharedData.options) {
+                newIsRtl = sharedData.options.rtl === true;
+                if (sharedData.options.theme && availableHljsThemes.includes(sharedData.options.theme)) {
+                  newCurrentHljsTheme = sharedData.options.theme;
+                }
+                newIsReadOnly = sharedData.options.readOnly === true; 
               }
+              
+              markdownInput = newMarkdownInput;
+              isRtl = newIsRtl;
+              currentHljsTheme = newCurrentHljsTheme;
+              isReadOnly = newIsReadOnly;
+              
+              if (cmView) {
+                 const currentDoc = cmView.state.doc.toString();
+                 if (currentDoc !== markdownInput) {
+                    cmView.dispatch({
+                        changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }
+                    });
+                 }
+              } else if (showEditorPane && editorHostEl) { 
+                 setupCodeMirror(markdownInput, isReadOnly);
+              }
+
+            } catch (e) {
+              console.error("Error parsing shared link data:", e);
+              alert("Could not load shared content. The link might be corrupted or invalid.");
             }
-            // history.replaceState(null, '', window.location.pathname + window.location.search); // Keep the hash
-          } catch (e) {
-            console.error("Error parsing shared link data:", e);
-            alert("Could not load shared content. The link might be corrupted or invalid.");
           }
         }
-      }
+        resolve();
+      });
     }
   
     $: htmlOutput = markedInstance.parse(markdownInput);
     $: showEditorPane = !isReadOnly || showEditorPaneInReadOnly;
     $: editorPaneInitialRatio = showEditorPane ? 0.5 : 0;
-  
-  </script>
+
+    $: if (cmView && typeof window !== 'undefined') {
+        let effects: StateEffect<unknown>[] = [];
+        const currentCmReadOnly = cmView.state.facet(EditorState.readOnly);
+        const currentCmDirAttr = cmView.contentDOM.getAttribute('dir');
+        const targetDir = isRtl ? 'rtl' : 'ltr';
+
+        if (currentCmReadOnly !== isReadOnly) {
+            effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+        }
+        if (currentCmDirAttr !== targetDir) {
+            effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+            editorHostEl?.classList.toggle('cm-rtl', isRtl);
+            editorHostEl?.classList.toggle('cm-ltr', !isRtl);
+        }
+
+        if (effects.length > 0) {
+            cmView.dispatch({ effects });
+        }
+    }
+    
+    // Ensure CodeMirror is created/destroyed when showEditorPane changes, especially if it wasn't due to isReadOnly change
+    $: if (typeof window !== 'undefined' && editorHostEl ) {
+        if (showEditorPane && !cmView) {
+            setupCodeMirror(markdownInput, isReadOnly);
+        } else if (!showEditorPane && cmView) {
+            cmView.scrollDOM.removeEventListener('scroll', handleScroll);
+            cmView.destroy();
+        }
+    }
+    
+    // Update CodeMirror text content if markdownInput changes from external sources (already handled in parseUrlHash)
+
+</script>
 
 <!-- svelte:head must be a top-level element -->
 <svelte:head>
@@ -186,20 +382,18 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
-  <!-- default.css is imported in script. Other themes are linked by changeTheme -->
 </svelte:head>
   
 {#if isLoading}
   <div class="flex min-h-screen flex-col items-center justify-center bg-gray-100">
     <div class="text-2xl font-semibold text-gray-700">Preparing editor...</div>
-    <!-- You can add a spinner SVG or animation here -->
     <svg class="mt-4 h-12 w-12 animate-spin text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
     </svg>
   </div>
 {:else}
-  <div class="flex h-screen flex-col" dir={isRtl ? 'rtl' : 'ltr'}>
+  <div class="flex h-screen flex-col" dir={isRtl ? 'rtl' : 'ltr'} style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">
     {#if !isReadOnly}
       <header class="flex items-center justify-between bg-gray-800 p-4 text-white shadow-md">
         <h1 class="text-2xl font-semibold">Markdown Editor</h1>
@@ -213,7 +407,7 @@
           <button 
             title="Toggle Split Orientation" 
             aria-label="Toggle editor split orientation" 
-            on:click={() => isVerticalSplit = !isVerticalSplit} 
+            on:click={() => {isVerticalSplit = !isVerticalSplit; tick().then(() => handleScroll()); }}
             class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
           >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="inline-block h-5 w-5 align-middle">
@@ -224,7 +418,7 @@
               {/if}
             </svg>
           </button>
-          <button title="Share Markdown" on:click={() => showShareModal = true} class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">
+          <button title="Share Markdown" on:click={() => showShareModal = true} class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500" disabled={isReadOnly}>
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5 align-middle">
               <path stroke-linecap="round" stroke-linejoin="round" d="M7.217 10.907a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Zm0 0v-.375c0-.621.504-1.125 1.125-1.125H12a9 9 0 0 1 9 9V21h-3V16.5a.75.75 0 0 0-.75-.75h-7.5a.75.75 0 0 0-.75.75V21H4.5V16.5a.75.75 0 0 1 .75-.75h2.25c.621 0 1.125.504 1.125 1.125V10.907ZM15.75 6.375a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z" />
             </svg>
@@ -234,6 +428,7 @@
             on:change={(e) => changeTheme(e)} 
             bind:value={currentHljsTheme}
             aria-label="Select Code Block Theme"
+            disabled={isReadOnly}
           >
             {#each availableHljsThemes as themeName}
               <option value={themeName}>{themeName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</option>
@@ -243,125 +438,115 @@
       </header>
     {/if}
   
-    <main class="flex flex-1 overflow-hidden bg-gray-100" class:pt-0={!isReadOnly} class:pt-safe={isReadOnly && !isVerticalSplit} dir={isRtl ? 'rtl' : 'ltr'}>
+    <main class="flex flex-1 overflow-hidden bg-gray-100" class:pt-0={!isReadOnly || isVerticalSplit} class:pt-safe={isReadOnly && !isVerticalSplit} dir={isRtl ? 'rtl' : 'ltr'} >
       <ResizablePanes 
         bind:vertical={isVerticalSplit} 
         initialRatio={editorPaneInitialRatio} 
-        minLeftPixels={showEditorPane ? 100 : 0} 
-        minRightPixels={showEditorPane ? 100 : 0} 
-        disableResizer={!showEditorPane} 
+        minLeftPixels={showEditorPane ? (isVerticalSplit ? 50 : 100) : 0} 
+        minRightPixels={isVerticalSplit ? 50 : 100}
+        disableResizer={isReadOnly}
       >
-        <div slot="left" class="flex h-full flex-col overflow-hidden bg-white shadow-sm" class:p-4={showEditorPane} class:!p-0={!showEditorPane} class:hidden={!showEditorPane} >
-          {#if showEditorPane} 
-            <h2 class="text-xl mb-2 font-semibold text-gray-700">Markdown Input</h2>
-            <textarea
-              bind:this={editorEl} 
-              bind:value={markdownInput}
-              class="w-full h-full flex-1 resize-none rounded-md border border-gray-300 p-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Write your markdown here..."
-              spellcheck="false"
-              aria-label="Markdown Input"
-              dir={isRtl ? 'rtl' : 'ltr'}
-              readonly={isReadOnly && !showEditorPaneInReadOnly} 
-            ></textarea>
+        <div slot="left" class="pane-a h-full w-full overflow-auto bg-white" style="{showEditorPane ? '' : 'display: none;'} font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">
+          {#if !isReadOnly && !isVerticalSplit && showEditorPane}
+             <div class="p-2 text-sm font-semibold text-gray-600 {isRtl ? 'text-right' : 'text-left'}" style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">Editor</div>
           {/if}
+          <div bind:this={editorHostEl} class="codemirror-host" style="height: {( !isReadOnly && !isVerticalSplit && showEditorPane) ? 'calc(100% - 2.5rem)' : '100%'}"></div>
         </div>
-        <div slot="right" 
-             class={`
-               flex h-full flex-col overflow-hidden bg-white shadow-sm 
-               ${!showEditorPane ? 'w-full' : ''}
-               ${(!isReadOnly && showEditorPane) ? 'p-4' : ''}
-               ${(!showEditorPane && !isReadOnly) ? 'p-0' : ''}
-               ${isReadOnly ? 'p-2 sm:p-4' : ''}
-             `}
-        >
-          {#if !isReadOnly}
-            <h2 class="text-xl mb-2 font-semibold text-gray-700">{isReadOnly ? 'Shared Content' : 'Preview'}</h2>
+        <div slot="right" class="pane-b h-full w-full overflow-auto bg-gray-50 p-1 {isVerticalSplit ? 'md:p-4' : 'md:p-6'}">
+          {#if !isReadOnly && !isVerticalSplit}
+             <div class="pb-2 text-sm font-semibold text-gray-600 {isRtl ? 'text-right' : 'text-left'}" style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;">Preview</div>
           {/if}
-          <div
-            bind:this={previewEl}
-            class={`
-              prose prose-sm sm:prose lg:prose-lg xl:prose-xl w-full h-full flex-1 overflow-auto rounded-md border border-gray-300
-              ${!isReadOnly ? 'p-2 max-w-none' : ''}
-              ${isReadOnly ? 'p-4 sm:p-6 max-w-4xl mx-auto' : ''}
-            `}
-            aria-label="Markdown Content Preview"
-            dir={isRtl ? 'rtl' : 'ltr'} 
+          <div 
+            bind:this={previewEl} 
+            class="prose max-w-none {isRtl ? 'prose-rtl text-right' : 'text-left'} 
+                   {isReadOnly && !isVerticalSplit ? 'max-w-3xl mx-auto' : ''} 
+                   w-full h-full overflow-auto" 
+            style="direction: {isRtl ? 'rtl' : 'ltr'}; font-family: {isRtl ? 'Noto Sans Arabic' : 'Roboto'}, sans-serif;"
           >
             {@html htmlOutput}
           </div>
         </div>
       </ResizablePanes>
     </main>
-  </div>
-
-  {#if showShareModal && !isReadOnly}
-    <ShareModal 
-      {markdownInput} 
-      initialRtl={isRtl} 
-      initialTheme={currentHljsTheme} 
-      availableThemes={availableHljsThemes}
-      on:close={() => showShareModal = false} 
-    />
-  {/if}
-{/if} <!-- End of isLoading check -->
   
+    {#if showShareModal}
+      <ShareModal 
+        markdownInput={markdownInput} 
+        initialRtl={isRtl} 
+        initialTheme={currentHljsTheme} 
+        availableThemes={availableHljsThemes}
+        on:close={() => showShareModal = false} 
+      />
+    {/if}
+  </div>
+{/if}
+
 <style>
   :global(body) {
-    /* Prioritize Noto Sans Arabic for RTL, fallback to Roboto, then system sans-serif */
-    font-family: 'Noto Sans Arabic', 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    color: #333;
-    background-color: #f7fafc; 
+    overscroll-behavior: none; 
   }
-  :global(body[dir="rtl"]) {
-    /* Ensure Noto Sans Arabic is specifically used when dir=rtl is on body */
-    font-family: 'Noto Sans Arabic', sans-serif;
+
+  :global(.prose) {
+    font-family: inherit;
   }
-  :global(body[dir="ltr"]) {
-    /* Ensure Roboto (or your preferred LTR font) is specifically used */
-    font-family: 'Roboto', 'Noto Sans Arabic', sans-serif; /* Noto Sans Arabic as fallback if Roboto lacks glyphs */
+  :global(.prose[dir="rtl"]) {
+    direction: rtl;
+    text-align: right;
   }
-  :global(.prose ul) { list-style-type: disc; padding-left: 1.5em; margin-left: 0.5em;}
-  :global(.prose ol) { list-style-type: decimal; padding-left: 1.5em; margin-left: 0.5em;}
-  :global(.prose blockquote) { border-left: 3px solid #cbd5e0; padding-left: 1em; margin-left: 0; font-style: italic; color: #4a5568; }
-  :global(.prose pre) { 
-    /* Fully reset padding and background on pre */
-    padding: 0;
-    background-color: transparent;
-    
-    /* Keep other useful pre styles */
-    overflow-x: auto; 
+  :global(.prose:not([dir="rtl"])) {
+    direction: ltr;
+    text-align: left;
+  }
+
+  :global(.prose pre) {
+    direction: ltr !important; 
+    text-align: left !important;
+    padding: 0 !important; 
+    background: transparent !important; 
     border-radius: 0.375rem; 
-    direction: ltr; 
-    text-align: left; 
-    margin-top: 1.2em; /* Add standard prose margin */
-    margin-bottom: 1.2em; /* Add standard prose margin */
+    margin-top: 1.6em; 
+    margin-bottom: 1.6em; 
   }
-  :global(.prose pre code) { /* General code inside pre, if not .hljs */
-    direction: ltr; 
-    text-align: left; 
-    white-space: pre; 
-    padding: 0; /* No padding on the generic code wrapper if it's not .hljs */
+  :global(.prose pre code.hljs) {
+    display: block;
+    padding: 1em; 
+    border-radius: 0.375rem; 
   }
-  :global(.prose pre code.hljs) { 
-    /* Theme provides background-color and color */
-    padding: 1em; /* Padding applied directly to the themed element */
-    display: block; /* Ensures padding works correctly and it fills the pre */
-    /* overflow-x: auto; /* Can be useful if lines are extremely long and pre's overflow is insufficient */
+
+  /* CodeMirror host style */
+  .codemirror-host {
+    /* height is now set inline for dynamic adjustment */
+    /* font-family is inherited from parent, CM theme sets monospace for scroller */
   }
-  :global(.prose code:not(.hljs):not(pre code)) { /* Target only inline code not inside pre */
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; 
-    background-color: #e2e8f0; 
-    padding: 0.2em 0.4em; 
-    border-radius: 0.25rem; 
-    font-size: 0.875em; 
-    /* Code snippets not in pre (inline code) should also be LTR if they contain technical terms/code */
-    direction: ltr; 
-    unicode-bidi: embed; /* Helps ensure LTR for inline code in RTL parent */
+
+  :global(.cm-editor) {
+    height: 100% !important;
   }
-  :global(.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6) { margin-top: 1.2em; margin-bottom: 0.6em; font-weight: 600; color: #2d3748; }
+
+  :global(.cm-scroller) {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace !important;
+  }
   
-  .pt-safe {
-    padding-top: 1rem; 
+  /* Ensure CM content direction is respected */
+  :global(.codemirror-host.cm-rtl .cm-content) {
+    direction: rtl;
+    text-align: right;
   }
+   :global(.codemirror-host.cm-ltr .cm-content) {
+    direction: ltr;
+    text-align: left;
+  }
+
+  :global(.prose-rtl h1, .prose-rtl h2, .prose-rtl h3, .prose-rtl h4, .prose-rtl p, .prose-rtl ul, .prose-rtl ol, .prose-rtl blockquote) {
+    text-align: right;
+  }
+  :global(.prose-rtl ul, .prose-rtl ol) {
+    padding-right: 1.25em; 
+    padding-left: 0;
+  }
+
+  .pt-safe { 
+    padding-top: 4rem; 
+  }
+  
 </style>
