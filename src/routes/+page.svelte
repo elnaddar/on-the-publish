@@ -1,6 +1,14 @@
 <script lang="ts">
-    import { Marked } from 'marked';
-    import { markedHighlight } from 'marked-highlight';
+    // import { Marked } from 'marked';
+    // import { markedHighlight } from 'marked-highlight';
+    import { unified } from 'unified';
+    import remarkParse from 'remark-parse';
+    import remarkGfm from 'remark-gfm';
+    import remarkGithubBetaBlockquoteAdmonitions from 'remark-github-beta-blockquote-admonitions';
+    import remarkRehype from 'remark-rehype';
+    import rehypeRaw from 'rehype-raw';
+    import rehypeHighlight from 'rehype-highlight';
+    import rehypeStringify from 'rehype-stringify';
     import hljs from 'highlight.js';
     import 'highlight.js/styles/default.css'; // Default theme is bundled
     import { onMount, onDestroy, tick } from 'svelte';
@@ -40,15 +48,47 @@
     
     let markdownInput = INITIAL_MARKDOWN;
     
-    const markedInstance = new Marked();
-    markedInstance.use(markedHighlight({
-      langPrefix: 'hljs language-',
-      highlight(code: string, lang: string) {
-        const language = hljs.getLanguage(lang) ? lang : 'plaintext';
-        return hljs.highlight(code, { language }).value;
-      }
-    }));
-    markedInstance.use({ pedantic: false, gfm: true, breaks: false });
+    // const markedInstance = new Marked();
+    // markedInstance.use(markedHighlight({
+    //   langPrefix: 'hljs language-',
+    //   highlight(code: string, lang: string) {
+    //     const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+    //     return hljs.highlight(code, { language }).value;
+    //   }
+    // }));
+    // markedInstance.use({ pedantic: false, gfm: true, breaks: false });
+
+    const processor = unified()
+      .use(remarkParse)
+      .use(remarkGfm)
+      .use(remarkGithubBetaBlockquoteAdmonitions, {
+        classNameMaps: {
+          block: (title: string) => {
+            const type = title.split(' ')[0].toLowerCase();
+            // Ensure that 'important' maps to 'admonition-important' as per existing CSS
+            const cssType = type === 'important' ? 'important' : type;
+            return ['admonition', `admonition-${cssType}`];
+          },
+          title: 'admonition-title' // Default class for the title paragraph
+        }
+      })
+      .use(remarkRehype, { allowDangerousHtml: true })
+      .use(rehypeRaw) // Make sure to handle raw HTML correctly
+      .use(rehypeHighlight, { 
+        highlight: (code: string, language: string) => {
+            const lang = hljs.getLanguage(language) ? language : 'plaintext';
+            try {
+                return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+            } catch (e) {
+                console.error("Highlight.js error:", e, "Lang:", lang, "Code:", code);
+                return hljs.highlightAuto(code).value; // Fallback to auto-highlight
+            }
+        },
+        plainText: ['txt', 'text'], // Ensure plaintext is not highlighted if language is not found
+        ignoreMissing: true, // Don't throw error if language not found
+        aliases: {'js': ['javascript'], 'ts': ['typescript']} // common aliases
+      })
+      .use(rehypeStringify);
 
     let editorHostEl: HTMLDivElement;
     let cmView: EditorView;
@@ -446,7 +486,21 @@
       });
     }
   
-    $: htmlOutput = markedInstance.parse(markdownInput);
+    let htmlOutput = ''; // Initialize htmlOutput
+
+    // Reactive statement to update htmlOutput when markdownInput changes
+    $: (async () => {
+      if (typeof markdownInput === 'string') {
+        try {
+          const file = await processor.process(markdownInput);
+          htmlOutput = String(file);
+        } catch (error) {
+          console.error("Error processing markdown:", error);
+          htmlOutput = "<p>Error processing Markdown. Check console for details.</p>";
+        }
+      }
+    })();
+
     $: showEditorPane = !isReadOnly || showEditorPaneInReadOnly;
     $: editorPaneInitialRatio = showEditorPane ? 0.5 : 0;
 
@@ -677,12 +731,23 @@
     padding: 1rem 1.25rem;
     margin-top: 1.5em;
     margin-bottom: 1.5em;
-    border-left-width: 5px;
-    border-left-style: solid;
+    /* border-left-width: 5px; */ /* Moved to direction-specific rules */
+    /* border-left-style: solid; */ /* Moved to direction-specific rules */
     border-radius: 0.375rem; /* rounded-md */
     background-color: #f9fafb; /* gray-50 */
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   }
+
+  :global(.prose:not([dir='rtl']) .admonition) {
+    border-left-width: 5px;
+    border-left-style: solid;
+  }
+
+  :global(.prose[dir='rtl'] .admonition) {
+    border-right-width: 5px;
+    border-right-style: solid;
+  }
+
   :global(.admonition-title) {
     font-weight: 600; /* semibold */
     margin-bottom: 0.5rem;
@@ -698,40 +763,65 @@
     margin-bottom: 0;
   }
 
-  :global(.admonition-note) {
+  :global(.prose:not([dir='rtl']) .admonition-note) {
     border-left-color: #3b82f6; /* blue-500 */
+  }
+  :global(.prose[dir='rtl'] .admonition-note) {
+    border-right-color: #3b82f6; /* blue-500 */
+  }
+  :global(.admonition-note) { /* Common background and title color */
     background-color: #eff6ff; /* blue-50 */
   }
   :global(.admonition-note .admonition-title) {
     color: #1d4ed8; /* blue-700 */
   }
 
-  :global(.admonition-tip) {
+  :global(.prose:not([dir='rtl']) .admonition-tip) {
     border-left-color: #10b981; /* green-500 */
+  }
+  :global(.prose[dir='rtl'] .admonition-tip) {
+    border-right-color: #10b981; /* green-500 */
+  }
+  :global(.admonition-tip) { /* Common background and title color */
     background-color: #f0fdf4; /* green-50 */
   }
   :global(.admonition-tip .admonition-title) {
     color: #047857; /* green-700 */
   }
 
-  :global(.admonition-important) {
+  :global(.prose:not([dir='rtl']) .admonition-important) {
     border-left-color: #8b5cf6; /* violet-500 */
+  }
+  :global(.prose[dir='rtl'] .admonition-important) {
+    border-right-color: #8b5cf6; /* violet-500 */
+  }
+  :global(.admonition-important) { /* Common background and title color */
     background-color: #f5f3ff; /* violet-50 */
   }
   :global(.admonition-important .admonition-title) {
     color: #6d28d9; /* violet-700 */
   }
 
-  :global(.admonition-warning) {
+  :global(.prose:not([dir='rtl']) .admonition-warning) {
     border-left-color: #f97316; /* orange-500 */
+  }
+  :global(.prose[dir='rtl'] .admonition-warning) {
+    border-right-color: #f97316; /* orange-500 */
+  }
+  :global(.admonition-warning) { /* Common background and title color */
     background-color: #fff7ed; /* orange-50 */
   }
   :global(.admonition-warning .admonition-title) {
     color: #c2410c; /* orange-700 */
   }
 
-  :global(.admonition-caution) {
+  :global(.prose:not([dir='rtl']) .admonition-caution) {
     border-left-color: #ef4444; /* red-500 */
+  }
+  :global(.prose[dir='rtl'] .admonition-caution) {
+    border-right-color: #ef4444; /* red-500 */
+  }
+  :global(.admonition-caution) { /* Common background and title color */
     background-color: #fef2f2; /* red-50 */
   }
   :global(.admonition-caution .admonition-title) {
