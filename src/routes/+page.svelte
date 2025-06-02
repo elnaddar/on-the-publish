@@ -10,16 +10,16 @@
 
     // CodeMirror imports
     import { EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
-    import { EditorState, StateEffect, Compartment } from '@codemirror/state';
+    import { EditorState, StateEffect, Compartment, Prec } from '@codemirror/state';
     import { markdown as langMarkdown, markdownKeymap } from '@codemirror/lang-markdown';
-    import { defaultKeymap, history, indentWithTab } from '@codemirror/commands';
-    import { LanguageDescription, syntaxTree } from '@codemirror/language';
+    import { defaultKeymap, history, indentWithTab, standardKeymap } from '@codemirror/commands';
+    import { LanguageDescription } from '@codemirror/language';
     import { languages } from '@codemirror/language-data';
-    import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
+    import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
     import { basicSetup } from 'codemirror';
 
 
-    let markdownInput = `# Hello, Markdown!
+    const INITIAL_MARKDOWN = `# Hello, Markdown!
   
   This is a **test**.
   
@@ -27,7 +27,18 @@
   console.log("Hello World!");
   \`\`\`
   - One
-  - Two`;
+  - Two
+  
+  > [!NOTE]
+  > This is a note callout.
+  
+  > [!TIP]
+  > This is a tip with a custom title!
+  
+  > [!WARNING]
+  > Be careful with this warning.`;
+    
+    let markdownInput = INITIAL_MARKDOWN;
     
     const markedInstance = new Marked();
     markedInstance.use(markedHighlight({
@@ -59,6 +70,76 @@
 
     let readOnlyCompartment = new Compartment();
     let directionCompartment = new Compartment();
+
+    let saveTimeout: number | undefined;
+    function saveSession() {
+        if (typeof window !== 'undefined') {
+            clearTimeout(saveTimeout);
+            saveTimeout = window.setTimeout(() => { // Debounce markdown saving
+                try {
+                    localStorage.setItem('mdEditorLastMarkdown', markdownInput);
+                    localStorage.setItem('mdEditorLastRtl', JSON.stringify(isRtl));
+                    localStorage.setItem('mdEditorLastTheme', currentHljsTheme);
+                    localStorage.setItem('mdEditorLastVerticalSplit', JSON.stringify(isVerticalSplit));
+                    // console.log('Session saved');
+                } catch (e) {
+                    console.error("Error saving session to localStorage:", e);
+                }
+            }, 500); // Debounce time for markdown
+        }
+    }
+
+    async function loadSession() {
+        if (typeof window !== 'undefined') {
+            try {
+                const savedMarkdown = localStorage.getItem('mdEditorLastMarkdown');
+                const savedRtl = localStorage.getItem('mdEditorLastRtl');
+                const savedTheme = localStorage.getItem('mdEditorLastTheme');
+                const savedVerticalSplit = localStorage.getItem('mdEditorLastVerticalSplit');
+
+                if (savedMarkdown !== null) markdownInput = savedMarkdown;
+                if (savedRtl !== null) isRtl = JSON.parse(savedRtl);
+                if (savedTheme !== null && availableHljsThemes.includes(savedTheme)) currentHljsTheme = savedTheme;
+                if (savedVerticalSplit !== null) isVerticalSplit = JSON.parse(savedVerticalSplit);
+                
+                // console.log('Session loaded');
+                await tick(); // Ensure state updates are processed before CM setup
+                if (cmView) {
+                    cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput } });
+                    // Update CM compartments if necessary (handled by reactive statements mostly)
+                } else if (showEditorPane && editorHostEl) {
+                    setupCodeMirror(markdownInput, isReadOnly);
+                }
+                await changeTheme(currentHljsTheme); // Apply loaded theme to preview
+            } catch (e) {
+                console.error("Error loading session from localStorage:", e);
+            }
+        }
+    }
+
+    function clearSessionAndReset() {
+        if (typeof window !== 'undefined') {
+            try {
+                localStorage.removeItem('mdEditorLastMarkdown');
+                localStorage.removeItem('mdEditorLastRtl');
+                localStorage.removeItem('mdEditorLastTheme');
+                localStorage.removeItem('mdEditorLastVerticalSplit');
+            } catch (e) {
+                console.error("Error clearing session from localStorage:", e);
+            }
+        }
+        markdownInput = INITIAL_MARKDOWN;
+        isRtl = false;
+        currentHljsTheme = 'default';
+        isVerticalSplit = false;
+        // console.log('Session cleared and editor reset');
+        if (cmView) {
+            setupCodeMirror(markdownInput, isReadOnly); // Re-setup CM with initial values
+        } else if (showEditorPane && editorHostEl) { // If CM wasn't there but should be
+            setupCodeMirror(markdownInput, isReadOnly);
+        }
+        changeTheme(currentHljsTheme); // Reset theme for preview
+    }
 
     const handleScroll = (event?: Event) => {
       if (isReadOnly && !showEditorPane) return;
@@ -148,16 +229,42 @@
         cmView.destroy();
       }
 
+      const customKeymap = [
+        { 
+            key: "Mod-b", run: (view: EditorView) => {
+                const { from, to } = view.state.selection.main;
+                const selection = view.state.sliceDoc(from, to);
+                view.dispatch({changes: {from, to, insert: `**${selection}**`}});
+                if (from === to) { // If no selection, move cursor inside
+                    view.dispatch({selection: {anchor: from + 2}});
+                }
+                return true;
+            }
+        },
+        { 
+            key: "Mod-i", run: (view: EditorView) => {
+                const { from, to } = view.state.selection.main;
+                const selection = view.state.sliceDoc(from, to);
+                view.dispatch({changes: {from, to, insert: `*${selection}*`}});
+                if (from === to) {
+                    view.dispatch({selection: {anchor: from + 1}});
+                }
+                return true;
+            }
+        }
+      ];
+
       const extensions = [
-        basicSetup,
-        keymap.of([...defaultKeymap, ...markdownKeymap, ...completionKeymap, indentWithTab]),
+        basicSetup, // Includes history, default keymap, line numbers, etc.
+        keymap.of([...customKeymap, ...standardKeymap, ...markdownKeymap, ...completionKeymap, ...closeBracketsKeymap, indentWithTab]),
         langMarkdown({
           codeLanguages: (info: string) => {
             const found = LanguageDescription.matchLanguageName(languages, info, true);
             return found;
           }
         }),
-        autocompletion(),
+        autocompletion(), // Includes closeBrackets() by default if closeBrackets extension is added
+        closeBrackets(), // For auto-pairing of brackets, quotes, etc.
         EditorView.lineWrapping,
         cmPlaceholder("Start typing your Markdown here..."),
         EditorView.updateListener.of(update => {
@@ -276,6 +383,7 @@
         }
         if (previewEl) previewEl.removeEventListener('scroll', handleScroll);
         clearTimeout(scrollTimeout);
+        clearTimeout(saveTimeout); // Clear save timeout on destroy
         const themeLink = document.getElementById('hljs-theme-link');
         if (themeLink) themeLink.remove();
         if (hashChangeHandler) window.removeEventListener('hashchange', hashChangeHandler);
@@ -374,6 +482,16 @@
     
     // Update CodeMirror text content if markdownInput changes from external sources (already handled in parseUrlHash)
 
+    $: if (typeof window !== 'undefined') { // Reactive session saving (excluding markdownInput here, handled by debounced saveSession)
+        if (!isLoading) { // Avoid saving during initial load phases
+          saveSession(); // This will now debounce markdown, but save others immediately if not also debounced
+        }
+    }
+    
+    // Separate reactive statement for markdownInput for debounced saving
+    $: if (typeof markdownInput === 'string' && typeof window !== 'undefined' && !isLoading) {
+        saveSession(); 
+    }
 </script>
 
 <!-- svelte:head must be a top-level element -->
@@ -421,6 +539,11 @@
           <button title="Share Markdown" on:click={() => showShareModal = true} class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500" disabled={isReadOnly}>
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5 align-middle">
               <path stroke-linecap="round" stroke-linejoin="round" d="M7.217 10.907a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Zm0 0v-.375c0-.621.504-1.125 1.125-1.125H12a9 9 0 0 1 9 9V21h-3V16.5a.75.75 0 0 0-.75-.75h-7.5a.75.75 0 0 0-.75.75V21H4.5V16.5a.75.75 0 0 1 .75-.75h2.25c.621 0 1.125.504 1.125 1.125V10.907ZM15.75 6.375a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z" />
+            </svg>
+          </button>
+          <button title="Reset Editor & Session" on:click={clearSessionAndReset} class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500" disabled={isReadOnly}>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5 align-middle">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
             </svg>
           </button>
           <select 
@@ -549,4 +672,69 @@
     padding-top: 4rem; 
   }
   
+  /* Admonition Styles */
+  :global(.admonition) {
+    padding: 1rem 1.25rem;
+    margin-top: 1.5em;
+    margin-bottom: 1.5em;
+    border-left-width: 5px;
+    border-left-style: solid;
+    border-radius: 0.375rem; /* rounded-md */
+    background-color: #f9fafb; /* gray-50 */
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  }
+  :global(.admonition-title) {
+    font-weight: 600; /* semibold */
+    margin-bottom: 0.5rem;
+    font-size: 1.125em; /* text-lg related */
+  }
+  :global(.admonition-content) {
+    font-size: 1em;
+  }
+  :global(.admonition-content > :first-child) {
+    margin-top: 0;
+  }
+  :global(.admonition-content > :last-child) {
+    margin-bottom: 0;
+  }
+
+  :global(.admonition-note) {
+    border-left-color: #3b82f6; /* blue-500 */
+    background-color: #eff6ff; /* blue-50 */
+  }
+  :global(.admonition-note .admonition-title) {
+    color: #1d4ed8; /* blue-700 */
+  }
+
+  :global(.admonition-tip) {
+    border-left-color: #10b981; /* green-500 */
+    background-color: #f0fdf4; /* green-50 */
+  }
+  :global(.admonition-tip .admonition-title) {
+    color: #047857; /* green-700 */
+  }
+
+  :global(.admonition-important) {
+    border-left-color: #8b5cf6; /* violet-500 */
+    background-color: #f5f3ff; /* violet-50 */
+  }
+  :global(.admonition-important .admonition-title) {
+    color: #6d28d9; /* violet-700 */
+  }
+
+  :global(.admonition-warning) {
+    border-left-color: #f97316; /* orange-500 */
+    background-color: #fff7ed; /* orange-50 */
+  }
+  :global(.admonition-warning .admonition-title) {
+    color: #c2410c; /* orange-700 */
+  }
+
+  :global(.admonition-caution) {
+    border-left-color: #ef4444; /* red-500 */
+    background-color: #fef2f2; /* red-50 */
+  }
+  :global(.admonition-caution .admonition-title) {
+    color: #b91c1c; /* red-700 */
+  }
 </style>
