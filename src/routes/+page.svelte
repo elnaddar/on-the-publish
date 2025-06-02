@@ -179,7 +179,7 @@
   <svelte:head>
     <title>Markdown Editor {isReadOnly ? '(Read-Only)' : ''}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
     <!-- default.css is imported in script. Other themes are linked by changeTheme -->
   </svelte:head>
@@ -309,21 +309,31 @@
     :global(.prose ol) { list-style-type: decimal; padding-left: 1.5em; margin-left: 0.5em;}
     :global(.prose blockquote) { border-left: 3px solid #cbd5e0; padding-left: 1em; margin-left: 0; font-style: italic; color: #4a5568; }
     :global(.prose pre) { 
-      background-color: #edf2f7; 
-      padding: 1em; 
+      /* Fully reset padding and background on pre */
+      padding: 0;
+      background-color: transparent;
+      
+      /* Keep other useful pre styles */
       overflow-x: auto; 
       border-radius: 0.375rem; 
       direction: ltr; 
       text-align: left; 
+      margin-top: 1.2em; /* Add standard prose margin */
+      margin-bottom: 1.2em; /* Add standard prose margin */
     }
-    :global(.prose pre code) { 
+    :global(.prose pre code) { /* General code inside pre, if not .hljs */
       direction: ltr; 
       text-align: left; 
-      /* Ensure code inside pre also respects LTR for selection/caret if parent pre doesn't fully enforce */
-      white-space: pre; /* Explicitly set for consistency */
+      white-space: pre; 
+      padding: 0; /* No padding on the generic code wrapper if it's not .hljs */
     }
-    :global(.prose pre code.hljs) { background-color: transparent; padding: 0; }
-    :global(.prose code:not(.hljs)) { 
+    :global(.prose pre code.hljs) { 
+      /* Theme provides background-color and color */
+      padding: 1em; /* Padding applied directly to the themed element */
+      display: block; /* Ensures padding works correctly and it fills the pre */
+      /* overflow-x: auto; /* Can be useful if lines are extremely long and pre's overflow is insufficient */
+    }
+    :global(.prose code:not(.hljs):not(pre code)) { /* Target only inline code not inside pre */
       font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; 
       background-color: #e2e8f0; 
       padding: 0.2em 0.4em; 
