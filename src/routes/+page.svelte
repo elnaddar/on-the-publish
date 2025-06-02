@@ -113,6 +113,9 @@
     let isReadOnly = false;      
     let showEditorPaneInReadOnly = false; 
     let isLoading = true; 
+    let showRestoreDialog = false; // New state for restore dialog
+    let foundSavedSession = false; // New state to indicate if a session was found
+    let allowSessionSaving = false; // Gate for allowing session saves
 
     let readOnlyCompartment = new Compartment();
     let directionCompartment = new Compartment();
@@ -137,28 +140,61 @@
 
     async function loadSession() {
         if (typeof window !== 'undefined') {
+            // Initialize with current Svelte state values as defaults before trying to load
+            // This ensures that if a specific item is missing or fails to parse from localStorage,
+            // the existing Svelte state for that item (which might be INITIAL_MARKDOWN's defaults or from URL hash)
+            // isn't unnecessarily changed unless a valid value is loaded for it.
+            let tempMarkdownInput = markdownInput;
+            let tempIsRtl = isRtl;
+            let tempCurrentHljsTheme = currentHljsTheme;
+            let tempIsVerticalSplit = isVerticalSplit;
+
             try {
                 const savedMarkdown = localStorage.getItem('mdEditorLastMarkdown');
-                const savedRtl = localStorage.getItem('mdEditorLastRtl');
-                const savedTheme = localStorage.getItem('mdEditorLastTheme');
-                const savedVerticalSplit = localStorage.getItem('mdEditorLastVerticalSplit');
-
-                if (savedMarkdown !== null) markdownInput = savedMarkdown;
-                if (savedRtl !== null) isRtl = JSON.parse(savedRtl);
-                if (savedTheme !== null && availableHljsThemes.includes(savedTheme)) currentHljsTheme = savedTheme;
-                if (savedVerticalSplit !== null) isVerticalSplit = JSON.parse(savedVerticalSplit);
-                
-                // console.log('Session loaded');
-                await tick(); // Ensure state updates are processed before CM setup
-                if (cmView) {
-                    cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput } });
-                    // Update CM compartments if necessary (handled by reactive statements mostly)
-                } else if (showEditorPane && editorHostEl) {
-                    setupCodeMirror(markdownInput, isReadOnly);
+                if (savedMarkdown !== null) {
+                    tempMarkdownInput = savedMarkdown;
                 }
-                await changeTheme(currentHljsTheme); // Apply loaded theme to preview
+
+                const savedRtlString = localStorage.getItem('mdEditorLastRtl');
+                if (savedRtlString !== null) {
+                    try {
+                        tempIsRtl = JSON.parse(savedRtlString);
+                    } catch (e) {
+                        console.error("Error parsing saved RTL state from localStorage, using current value. Error:", e, "Value:", savedRtlString);
+                    }
+                }
+
+                const savedTheme = localStorage.getItem('mdEditorLastTheme');
+                if (savedTheme !== null) {
+                    if (availableHljsThemes.includes(savedTheme)) {
+                        tempCurrentHljsTheme = savedTheme;
+                    } else {
+                        console.log('Saved theme not available, using current value. Saved theme:', savedTheme);
+                    }
+                }
+
+                const savedVerticalSplitString = localStorage.getItem('mdEditorLastVerticalSplit');
+                if (savedVerticalSplitString !== null) {
+                    try {
+                        tempIsVerticalSplit = JSON.parse(savedVerticalSplitString);
+                    } catch (e) {
+                        console.error("Error parsing saved vertical split state from localStorage, using current value. Error:", e, "Value:", savedVerticalSplitString);
+                    }
+                }
+
+                // Now, assign the potentially updated values back to the Svelte state variables
+                markdownInput = tempMarkdownInput;
+                isRtl = tempIsRtl;
+                currentHljsTheme = tempCurrentHljsTheme;
+                isVerticalSplit = tempIsVerticalSplit;
+
             } catch (e) {
-                console.error("Error loading session from localStorage:", e);
+                // This catch is for any unexpected errors during localStorage.getItem itself (e.g., security restrictions)
+                console.error("Critical error reading from localStorage during loadSession, resetting to defaults:", e);
+                markdownInput = INITIAL_MARKDOWN;
+                isRtl = false;
+                currentHljsTheme = 'default';
+                isVerticalSplit = false;
             }
         }
     }
@@ -364,10 +400,31 @@
       let hashChangeHandler: () => Promise<void>;
 
       const init = async () => {
-        isLoading = true;
+        // isLoading = true; // isLoading is true by default
+
+        if (typeof window !== 'undefined') {
+            const savedMarkdownExists = localStorage.getItem('mdEditorLastMarkdown');
+            if (savedMarkdownExists !== null) {
+                foundSavedSession = true;
+                showRestoreDialog = true;
+                isLoading = false; // Show dialog, hide loader
+                return; // Pause initialization until user makes a choice
+            }
+        }
+
+        // If no saved session, or after dialog is handled, proceed with normal initialization
+        await proceedWithInitialization();
+      };
+
+      const proceedWithInitialization = async () => {
+        isLoading = true; // Ensure loader is shown for this part
+        await tick();
+
         await parseUrlHashForSharedContent();
         
         if (showEditorPane && editorHostEl) {
+          // If markdownInput was changed by parseUrlHash, setup CM with it
+          // Otherwise, it's INITIAL_MARKDOWN or from a restored session (already handled if dialog was shown)
           setupCodeMirror(markdownInput, isReadOnly);
         }
         
@@ -378,6 +435,7 @@
         await changeTheme(currentHljsTheme); 
 
         hashChangeHandler = async () => {
+          // No dialog on hash change, directly re-process
           isLoading = true;
           await parseUrlHashForSharedContent();
           if (showEditorPane && editorHostEl) {
@@ -410,7 +468,7 @@
           await changeTheme(currentHljsTheme);
           isLoading = false;
           await tick();
-          handleScroll();
+          if (showEditorPane) handleScroll();
         };
 
         window.addEventListener('hashchange', hashChangeHandler);
@@ -418,6 +476,7 @@
         isLoading = false;
         await tick();
         if (showEditorPane) handleScroll();
+        allowSessionSaving = true; // Allow saving after initial non-dialog setup
       };
 
       init();
@@ -543,14 +602,78 @@
     // Update CodeMirror text content if markdownInput changes from external sources (already handled in parseUrlHash)
 
     $: if (typeof window !== 'undefined') { // Reactive session saving (excluding markdownInput here, handled by debounced saveSession)
-        if (!isLoading) { // Avoid saving during initial load phases
+        if (!isLoading && allowSessionSaving) { // Added allowSessionSaving
           saveSession(); // This will now debounce markdown, but save others immediately if not also debounced
         }
     }
     
     // Separate reactive statement for markdownInput for debounced saving
-    $: if (typeof markdownInput === 'string' && typeof window !== 'undefined' && !isLoading) {
+    $: if (typeof markdownInput === 'string' && typeof window !== 'undefined' && !isLoading && allowSessionSaving) { // Added allowSessionSaving
         saveSession(); 
+    }
+
+    async function actionRestoreSession() {
+      showRestoreDialog = false;
+      isLoading = true;
+      await tick(); // Allow UI to update (hide dialog, show loader)
+
+      await loadSession(); // Load data into Svelte state
+      await parseUrlHashForSharedContent(); // Parse URL hash, potentially overriding parts of loaded session or being additive
+
+      if (showEditorPane && editorHostEl) {
+        if (cmView) {
+          cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput } });
+           // Ensure CM readOnly and direction are also updated if changed by loaded session/hash
+          const targetDir = isRtl ? 'rtl' : 'ltr';
+          let effects: StateEffect<unknown>[] = [];
+          if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+            effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+          }
+          if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
+            effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+          }
+          if (effects.length > 0) cmView.dispatch({effects});
+        } else {
+          setupCodeMirror(markdownInput, isReadOnly);
+        }
+      } else if (!showEditorPane && cmView) { // If editor pane should be hidden but CM exists
+        cmView.destroy();
+      }
+      await changeTheme(currentHljsTheme);
+      isLoading = false;
+      await tick();
+      if (showEditorPane) handleScroll();
+      allowSessionSaving = true; // Allow saving after restoring session
+    }
+
+    async function actionStartNewSession() {
+      showRestoreDialog = false;
+      isLoading = true;
+      await tick();
+
+      // Reset state variables to defaults
+      markdownInput = INITIAL_MARKDOWN;
+      isRtl = false;
+      currentHljsTheme = 'default';
+      isVerticalSplit = false;
+      isReadOnly = false; // Default, will be overridden by hash if present
+      
+      await parseUrlHashForSharedContent(); // Parse URL hash for potential readOnly, theme, etc.
+
+      if (showEditorPane && editorHostEl) {
+        if (cmView) { // If CM exists, update it or re-create for clean slate
+            setupCodeMirror(markdownInput, isReadOnly); // Re-setup for pristine state
+        } else {
+            setupCodeMirror(markdownInput, isReadOnly);
+        }
+      } else if (!showEditorPane && cmView) {
+         cmView.destroy();
+      }
+      await changeTheme(currentHljsTheme);
+      isLoading = false;
+      await tick();
+      if (showEditorPane) handleScroll();
+      allowSessionSaving = true; // Allow saving after starting new session
     }
 </script>
 
@@ -570,6 +693,29 @@
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
     </svg>
+  </div>
+{:else if showRestoreDialog}
+  <div class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-900 bg-opacity-75 p-4" dir="ltr"> <!-- Ensure dialog is always LTR for consistency -->
+    <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+      <h2 class="mb-4 text-center text-2xl font-semibold text-gray-800">Session Found</h2>
+      <p class="mb-6 text-center text-gray-600">
+        A previous editing session was found. Would you like to restore it or start a new one?
+      </p>
+      <div class="flex justify-around space-x-4">
+        <button 
+          on:click={actionRestoreSession} 
+          class="flex-1 rounded-md bg-blue-600 px-6 py-3 text-lg font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors duration-150"
+        >
+          Restore Session
+        </button>
+        <button 
+          on:click={actionStartNewSession} 
+          class="flex-1 rounded-md bg-gray-200 px-6 py-3 text-lg font-medium text-gray-700 shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors duration-150"
+        >
+          Start New
+        </button>
+      </div>
+    </div>
   </div>
 {:else}
   <div class="flex h-screen flex-col" dir={isRtl ? 'rtl' : 'ltr'} style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Inter'}, sans-serif;">
