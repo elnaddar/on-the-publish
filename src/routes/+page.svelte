@@ -115,7 +115,8 @@
     let isLoading = true; 
     let showRestoreDialog = false; // New state for restore dialog
     let foundSavedSession = false; // New state to indicate if a session was found
-    let allowSessionSaving = false; // Gate for allowing session saves
+    let allowSessionSaving = false; // Gate for allowing session saves - DEFAULT FALSE
+    let primeForSavingOnNextEditAfterShareLoad = false; // True if shared content just loaded, waiting for first edit
 
     let readOnlyCompartment = new Compartment();
     let directionCompartment = new Compartment();
@@ -125,14 +126,19 @@
         if (typeof window !== 'undefined') {
             clearTimeout(saveTimeout);
             saveTimeout = window.setTimeout(() => { // Debounce markdown saving
-                try {
-                    localStorage.setItem('mdEditorLastMarkdown', markdownInput);
-                    localStorage.setItem('mdEditorLastRtl', JSON.stringify(isRtl));
-                    localStorage.setItem('mdEditorLastTheme', currentHljsTheme);
-                    localStorage.setItem('mdEditorLastVerticalSplit', JSON.stringify(isVerticalSplit));
-                    // console.log('Session saved');
-                } catch (e) {
-                    console.error("Error saving session to localStorage:", e);
+                // Check allowSessionSaving AT THE TIME OF ACTUAL SAVING
+                if (!isLoading && allowSessionSaving) { 
+                    try {
+                        localStorage.setItem('mdEditorLastMarkdown', markdownInput);
+                        localStorage.setItem('mdEditorLastRtl', JSON.stringify(isRtl));
+                        localStorage.setItem('mdEditorLastTheme', currentHljsTheme);
+                        localStorage.setItem('mdEditorLastVerticalSplit', JSON.stringify(isVerticalSplit));
+                        // console.log('Session actually saved (debounced):', markdownInput.substring(0,20));
+                    } catch (e) {
+                        console.error("Error saving session to localStorage:", e);
+                    }
+                } else {
+                    // console.log('Debounced saveSession was called, but allowSessionSaving is false or isLoading is true. Not saving.');
                 }
             }, 500); // Debounce time for markdown
         }
@@ -352,6 +358,11 @@
         EditorView.updateListener.of(update => {
           if (update.docChanged) {
             markdownInput = update.state.doc.toString();
+            if (primeForSavingOnNextEditAfterShareLoad) {
+                allowSessionSaving = true;
+                primeForSavingOnNextEditAfterShareLoad = false;
+                // console.log("First edit on shared/newly-hashed content: enabling session saving.");
+            }
           }
           if (update.geometryChanged) {
              if(!isEditorScrolling && !isPreviewScrolling){
@@ -403,17 +414,29 @@
         // isLoading = true; // isLoading is true by default
 
         if (typeof window !== 'undefined') {
+            if (window.location.hash.startsWith('#share=')) {
+                // allowSessionSaving remains false initially for share links
+                // primeForSavingOnNextEditAfterShareLoad will be set by parseUrlHashForSharedContent
+                await proceedWithInitialization();
+                return;
+            }
+            
+            // Not starting on a share link.
             const savedMarkdownExists = localStorage.getItem('mdEditorLastMarkdown');
             if (savedMarkdownExists !== null) {
                 foundSavedSession = true;
                 showRestoreDialog = true;
                 isLoading = false; // Show dialog, hide loader
-                return; // Pause initialization until user makes a choice
-            }
+                // allowSessionSaving remains false until user chooses from dialog and action sets it.
+                return; 
+            } 
+            // No local session, no share link. Start fresh.
+            // allowSessionSaving is still false. parseUrlHash (via proceed) will load initial content and set it to true.
+            await proceedWithInitialization();
+            
+        } else { // Should not happen in a browser environment for full init
+            await proceedWithInitialization();
         }
-
-        // If no saved session, or after dialog is handled, proceed with normal initialization
-        await proceedWithInitialization();
       };
 
       const proceedWithInitialization = async () => {
@@ -476,7 +499,6 @@
         isLoading = false;
         await tick();
         if (showEditorPane) handleScroll();
-        allowSessionSaving = true; // Allow saving after initial non-dialog setup
       };
 
       init();
@@ -511,10 +533,10 @@
               const jsonString = pako.inflate(compressedDataArr, { to: 'string' });
               const sharedData = JSON.parse(jsonString);
     
-              let newMarkdownInput = markdownInput;
-              let newIsRtl = isRtl;
-              let newCurrentHljsTheme = currentHljsTheme;
-              let newIsReadOnly = isReadOnly;
+              let newMarkdownInput = INITIAL_MARKDOWN; // Default if not in shared data
+              let newIsRtl = false;
+              let newCurrentHljsTheme = 'default';
+              let newIsReadOnly = false;
 
               if (sharedData.markdown) newMarkdownInput = sharedData.markdown;
               if (sharedData.options) {
@@ -537,14 +559,75 @@
                         changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }
                     });
                  }
+                 // Ensure CM readOnly and direction are also updated for shared content
+                  const targetDir = isRtl ? 'rtl' : 'ltr';
+                  let effects: StateEffect<unknown>[] = [];
+                  if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+                    effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+                  }
+                  if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
+                    effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+                  }
+                  if (effects.length > 0) cmView.dispatch({effects});
+
               } else if (showEditorPane && editorHostEl) { 
                  setupCodeMirror(markdownInput, isReadOnly);
               }
+              await changeTheme(currentHljsTheme);
+
+              allowSessionSaving = false; // Explicitly disable saving for fresh shared content
+              primeForSavingOnNextEditAfterShareLoad = true;
 
             } catch (e) {
               console.error("Error parsing shared link data:", e);
               alert("Could not load shared content. The link might be corrupted or invalid.");
+              // Fallback: clear potential prime flag, enable saving for whatever is current (likely initial/default)
+              primeForSavingOnNextEditAfterShareLoad = false;
+              allowSessionSaving = true; 
             }
+          } else {
+            // No share hash. This means we either started on a non-share URL,
+            // or navigated away from a share URL.
+            primeForSavingOnNextEditAfterShareLoad = false;
+
+            if (!allowSessionSaving) {
+                // This implies we were on a share link, didn't edit (so saving was off),
+                // and navigated away. Or it's an initial load without a session/share link.
+                // Load local session or initial content.
+                const savedMarkdownExists = localStorage.getItem('mdEditorLastMarkdown');
+                if (savedMarkdownExists !== null) {
+                    await loadSession(); // This loads all session parts into Svelte vars
+                } else {
+                    markdownInput = INITIAL_MARKDOWN;
+                    isRtl = false; 
+                    currentHljsTheme = 'default';
+                    isVerticalSplit = false;
+                    isReadOnly = false; 
+                }
+                
+                if (cmView) {
+                    if (cmView.state.doc.toString() !== markdownInput) {
+                        cmView.dispatch({
+                            changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }
+                        });
+                    }
+                    const targetDir = isRtl ? 'rtl' : 'ltr';
+                    let effects: StateEffect<unknown>[] = [];
+                    if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+                        effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+                    }
+                    if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
+                        effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+                    }
+                    if (effects.length > 0) cmView.dispatch({effects});
+                } else if (showEditorPane && editorHostEl) {
+                    setupCodeMirror(markdownInput, isReadOnly);
+                }
+                await changeTheme(currentHljsTheme); 
+            }
+            // Now that we're on a non-share page, and content is settled, saving should be active.
+            await tick(); // Ensure all state changes are processed before enabling saving
+            allowSessionSaving = true;
           }
         }
         resolve();
@@ -618,15 +701,18 @@
       await tick(); // Allow UI to update (hide dialog, show loader)
 
       await loadSession(); // Load data into Svelte state
-      await parseUrlHashForSharedContent(); // Parse URL hash, potentially overriding parts of loaded session or being additive
+      // No longer calling parseUrlHashForSharedContent here.
+      // URL hash priority is handled by init onMount and the hashchange listener.
 
       if (showEditorPane && editorHostEl) {
         if (cmView) {
-          cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput } });
-           // Ensure CM readOnly and direction are also updated if changed by loaded session/hash
+          // Update CM with restored content
+          if (cmView.state.doc.toString() !== markdownInput) {
+            cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput } });
+          }
           const targetDir = isRtl ? 'rtl' : 'ltr';
           let effects: StateEffect<unknown>[] = [];
-          if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+          if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) { // isReadOnly from restored session
             effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
           }
           if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
@@ -636,14 +722,15 @@
         } else {
           setupCodeMirror(markdownInput, isReadOnly);
         }
-      } else if (!showEditorPane && cmView) { // If editor pane should be hidden but CM exists
+      } else if (!showEditorPane && cmView) { 
         cmView.destroy();
       }
       await changeTheme(currentHljsTheme);
       isLoading = false;
+      allowSessionSaving = true; 
+      primeForSavingOnNextEditAfterShareLoad = false;
       await tick();
       if (showEditorPane) handleScroll();
-      allowSessionSaving = true; // Allow saving after restoring session
     }
 
     async function actionStartNewSession() {
@@ -651,18 +738,16 @@
       isLoading = true;
       await tick();
 
-      // Reset state variables to defaults
       markdownInput = INITIAL_MARKDOWN;
       isRtl = false;
       currentHljsTheme = 'default';
       isVerticalSplit = false;
-      isReadOnly = false; // Default, will be overridden by hash if present
-      
-      await parseUrlHashForSharedContent(); // Parse URL hash for potential readOnly, theme, etc.
+      isReadOnly = false; 
+      // No longer calling parseUrlHashForSharedContent here.
 
       if (showEditorPane && editorHostEl) {
-        if (cmView) { // If CM exists, update it or re-create for clean slate
-            setupCodeMirror(markdownInput, isReadOnly); // Re-setup for pristine state
+        if (cmView) { 
+            setupCodeMirror(markdownInput, isReadOnly); 
         } else {
             setupCodeMirror(markdownInput, isReadOnly);
         }
@@ -671,9 +756,10 @@
       }
       await changeTheme(currentHljsTheme);
       isLoading = false;
+      allowSessionSaving = true; 
+      primeForSavingOnNextEditAfterShareLoad = false;
       await tick();
       if (showEditorPane) handleScroll();
-      allowSessionSaving = true; // Allow saving after starting new session
     }
 </script>
 
