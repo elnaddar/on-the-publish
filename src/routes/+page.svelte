@@ -110,12 +110,29 @@
       
       changeTheme(currentHljsTheme); 
   
+      const handleHashChange = () => {
+        parseUrlHashForSharedContent();
+        // Potentially re-apply theme and scroll listeners if content reloads affecting these
+        changeTheme(currentHljsTheme); 
+        if (showEditorPane && editorEl && previewEl) {
+            editorEl.removeEventListener('scroll', handleScroll); // Avoid duplicate listeners
+            previewEl.removeEventListener('scroll', handleScroll);
+            editorEl.addEventListener('scroll', handleScroll);
+            previewEl.addEventListener('scroll', handleScroll);
+        } else if (!showEditorPane && previewEl) {
+            // Handle scroll for preview only if necessary
+        }
+      };
+
+      window.addEventListener('hashchange', handleHashChange);
+  
       return () => {
         if (editorEl) editorEl.removeEventListener('scroll', handleScroll);
         if (previewEl) previewEl.removeEventListener('scroll', handleScroll);
         clearTimeout(scrollTimeout);
         const themeLink = document.getElementById('hljs-theme-link');
         if (themeLink) themeLink.remove();
+        window.removeEventListener('hashchange', handleHashChange);
       };
     });
   
@@ -144,7 +161,7 @@
                 isReadOnly = true;
               }
             }
-            history.replaceState(null, '', window.location.pathname + window.location.search);
+            // history.replaceState(null, '', window.location.pathname + window.location.search); // Keep the hash
           } catch (e) {
             console.error("Error parsing shared link data:", e);
             alert("Could not load shared content. The link might be corrupted or invalid.");
@@ -161,6 +178,9 @@
   
   <svelte:head>
     <title>Markdown Editor {isReadOnly ? '(Read-Only)' : ''}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
     <!-- default.css is imported in script. Other themes are linked by changeTheme -->
   </svelte:head>
   
@@ -175,7 +195,12 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
             </svg>
           </button>
-          <button title="Toggle Split Orientation" on:click={() => isVerticalSplit = !isVerticalSplit} class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">
+          <button 
+            title="Toggle Split Orientation" 
+            aria-label="Toggle editor split orientation" 
+            on:click={() => isVerticalSplit = !isVerticalSplit} 
+            class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
+          >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="inline-block h-5 w-5 align-middle">
               {#if isVerticalSplit}
                 <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h18M16.5 3l4.5 4.5m0 0L16.5 12M21 7.5H3" />
@@ -226,13 +251,27 @@
             ></textarea>
           {/if}
         </div>
-        <div slot="right" class="flex h-full flex-col overflow-hidden p-4 bg-white shadow-sm" class:w-full={!showEditorPane}>
-          <h2 class="text-xl mb-2 font-semibold text-gray-700">{isReadOnly ? 'Shared Content' : 'Preview'}</h2>
+        <div slot="right" 
+             class={`
+               flex h-full flex-col overflow-hidden bg-white shadow-sm 
+               ${!showEditorPane ? 'w-full' : ''}
+               ${(!isReadOnly && showEditorPane) ? 'p-4' : ''}
+               ${(!showEditorPane && !isReadOnly) ? 'p-0' : ''}
+               ${isReadOnly ? 'p-2 sm:p-4' : ''}
+             `}
+        >
+          {#if !isReadOnly}
+            <h2 class="text-xl mb-2 font-semibold text-gray-700">{isReadOnly ? 'Shared Content' : 'Preview'}</h2>
+          {/if}
           <div
             bind:this={previewEl}
-            class="prose prose-sm sm:prose lg:prose-lg xl:prose-xl max-w-none w-full h-full flex-1 overflow-auto rounded-md border border-gray-300 p-2"
+            class={`
+              prose prose-sm sm:prose lg:prose-lg xl:prose-xl w-full h-full flex-1 overflow-auto rounded-md border border-gray-300
+              ${!isReadOnly ? 'p-2 max-w-none' : ''}
+              ${isReadOnly ? 'p-4 sm:p-6 max-w-4xl mx-auto' : ''}
+            `}
             aria-label="Markdown Content Preview"
-            dir={isRtl ? 'rtl' : 'ltr'}
+            dir={isRtl ? 'rtl' : 'ltr'} 
           >
             {@html htmlOutput}
           </div>
@@ -253,16 +292,47 @@
   
   <style>
     :global(body) {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      /* Prioritize Noto Sans Arabic for RTL, fallback to Roboto, then system sans-serif */
+      font-family: 'Noto Sans Arabic', 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       color: #333;
       background-color: #f7fafc; 
+    }
+    :global(body[dir="rtl"]) {
+      /* Ensure Noto Sans Arabic is specifically used when dir=rtl is on body */
+      font-family: 'Noto Sans Arabic', sans-serif;
+    }
+    :global(body[dir="ltr"]) {
+      /* Ensure Roboto (or your preferred LTR font) is specifically used */
+      font-family: 'Roboto', 'Noto Sans Arabic', sans-serif; /* Noto Sans Arabic as fallback if Roboto lacks glyphs */
     }
     :global(.prose ul) { list-style-type: disc; padding-left: 1.5em; margin-left: 0.5em;}
     :global(.prose ol) { list-style-type: decimal; padding-left: 1.5em; margin-left: 0.5em;}
     :global(.prose blockquote) { border-left: 3px solid #cbd5e0; padding-left: 1em; margin-left: 0; font-style: italic; color: #4a5568; }
-    :global(.prose pre) { background-color: #edf2f7; padding: 1em; overflow-x: auto; border-radius: 0.375rem; }
+    :global(.prose pre) { 
+      background-color: #edf2f7; 
+      padding: 1em; 
+      overflow-x: auto; 
+      border-radius: 0.375rem; 
+      direction: ltr; 
+      text-align: left; 
+    }
+    :global(.prose pre code) { 
+      direction: ltr; 
+      text-align: left; 
+      /* Ensure code inside pre also respects LTR for selection/caret if parent pre doesn't fully enforce */
+      white-space: pre; /* Explicitly set for consistency */
+    }
     :global(.prose pre code.hljs) { background-color: transparent; padding: 0; }
-    :global(.prose code:not(.hljs)) { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; background-color: #e2e8f0; padding: 0.2em 0.4em; border-radius: 0.25rem; font-size: 0.875em; }
+    :global(.prose code:not(.hljs)) { 
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; 
+      background-color: #e2e8f0; 
+      padding: 0.2em 0.4em; 
+      border-radius: 0.25rem; 
+      font-size: 0.875em; 
+      /* Code snippets not in pre (inline code) should also be LTR if they contain technical terms/code */
+      direction: ltr; 
+      unicode-bidi: embed; /* Helps ensure LTR for inline code in RTL parent */
+    }
     :global(.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6) { margin-top: 1.2em; margin-bottom: 0.6em; font-weight: 600; color: #2d3748; }
     
     .pt-safe {

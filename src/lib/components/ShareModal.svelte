@@ -27,9 +27,12 @@
 
 		try {
 			const jsonString = JSON.stringify(dataToShare);
-			const compressed = pako.deflate(jsonString, { to: 'string' });
-			// Base64 encode the compressed string to make it URL-safe
-			const encoded = btoa(compressed);
+			const compressedUint8Array = pako.deflate(jsonString); // Returns Uint8Array
+			let binaryString = '';
+			for (let i = 0; i < compressedUint8Array.length; i++) {
+				binaryString += String.fromCharCode(compressedUint8Array[i]);
+			}
+			const encoded = btoa(binaryString);
 
 			// Construct the URL. We will need a separate route/page to handle these links later.
 			// For now, let's assume a '/s/:data' structure or query param.
