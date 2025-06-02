@@ -683,6 +683,121 @@
     text-align: left;
   }
 
+  /* Enhanced Prose Typography */
+  :global(.prose) {
+    font-size: 1.125rem; /* Approx 18px, good for readability */
+    line-height: 1.6; /* Slightly reduced from 1.7 for tighter feel */
+  }
+
+  :global(.prose p) {
+    margin-top: 0.75em; /* Reduced from 1.25em */
+    margin-bottom: 0.75em; /* Reduced from 1.25em */
+  }
+
+  :global(.prose h1) {
+    font-size: 2.25em; /* Slightly reduced from 2.5em */
+    font-weight: 700;
+    margin-top: 1em; /* Reduced from 1.5em */
+    margin-bottom: 0.5em; /* Reduced from 0.75em */
+    line-height: 1.2;
+  }
+  :global(.prose h2) {
+    font-size: 1.75em; /* Slightly reduced from 2em */
+    font-weight: 700;
+    margin-top: 1.25em; /* Reduced from 1.75em */
+    margin-bottom: 0.5em; /* Reduced from 0.75em */
+    line-height: 1.3;
+  }
+  :global(.prose h3) {
+    font-size: 1.375em; /* Slightly reduced from 1.5em */
+    font-weight: 700;
+    margin-top: 1.25em; /* Reduced from 1.75em */
+    margin-bottom: 0.4em; /* Reduced from 0.6em */
+    line-height: 1.4;
+  }
+  :global(.prose h4) {
+    font-size: 1.125em; /* Slightly reduced from 1.25em, now same as base */
+    font-weight: 700;
+    margin-top: 1.25em; /* Reduced from 1.75em */
+    margin-bottom: 0.3em; /* Reduced from 0.5em */
+    line-height: 1.4;
+  }
+
+  :global(.prose hr) {
+    margin-top: 1.75em; /* Reduced from 2.5em */
+    margin-bottom: 1.75em; /* Reduced from 2.5em */
+    border-top-width: 1px;
+  }
+  
+  /* Standard Blockquote Styling (distinct from admonitions) */
+  :global(.prose blockquote:not(.admonition)) {
+    margin-top: 1.25em; /* Reduced from 1.75em */
+    margin-bottom: 1.25em; /* Reduced from 1.75em */
+    padding-top: 0.3em; /* Reduced from 0.5em */
+    padding-bottom: 0.3em; /* Reduced from 0.5em */
+    font-style: italic;
+    color: #4b5563; /* gray-600 */
+  }
+  :global([dir="ltr"] .prose blockquote:not(.admonition)) {
+    border-left-width: 0.25rem; /* 4px */
+    border-left-color: #d1d5db; /* gray-300 */
+    padding-left: 0.75em; /* Reduced from 1em */
+    padding-right: 0;
+  }
+  :global([dir="rtl"] .prose blockquote:not(.admonition)) {
+    border-right-width: 0.25rem; /* 4px */
+    border-right-color: #d1d5db; /* gray-300 */
+    padding-right: 0.75em; /* Reduced from 1em */
+    padding-left: 0;
+  }
+  :global(.prose blockquote:not(.admonition) p:first-of-type::before) {
+    content: none; /* Tailwind prose adds quotes, remove them for a cleaner style */
+  }
+  :global(.prose blockquote:not(.admonition) p:last-of-type::after) {
+    content: none; /* Tailwind prose adds quotes, remove them */
+  }
+
+  :global(.prose ul, .prose ol) {
+    margin-top: 0.75em; /* Reduced from 1.25em */
+    margin-bottom: 0.75em; /* Reduced from 1.25em */
+  }
+  :global(.prose li) {
+    margin-top: 0.2em; /* Reduced from 0.4em */
+    margin-bottom: 0.2em; /* Reduced from 0.4em */
+  }
+  :global(.prose ul ul, .prose ul ol, .prose ol ul, .prose ol ol) {
+    margin-top: 0.5em; /* Reduced from 0.75em */
+    margin-bottom: 0.5em; /* Reduced from 0.75em */
+  }
+
+  :global(.prose a) {
+    color: #2563eb; /* blue-600 */
+    text-decoration: underline;
+    text-decoration-color: #93c5fd; /* blue-300 */
+    text-underline-offset: 2px;
+    transition: color 0.2s ease-in-out, text-decoration-color 0.2s ease-in-out;
+  }
+  :global(.prose a:hover) {
+    color: #1d4ed8; /* blue-700 */
+    text-decoration-color: #3b82f6; /* blue-500 */
+  }
+  :global(.prose strong) {
+    font-weight: 700;
+  }
+  :global(.prose code:not(pre code)) {
+    font-size: 0.875em;
+    padding: 0.2em 0.4em;
+    margin: 0 0.1em;
+    background-color: #e5e7eb; /* gray-200 */
+    border-radius: 0.25rem;
+    color: #374151; /* gray-700 */
+    font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  }
+  :global([dir="rtl"] .prose code:not(pre code)) {
+     /* Ensure monospace font still applies */
+    font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  }
+
   :global(.prose pre) {
     direction: ltr !important; 
     text-align: left !important;
@@ -736,11 +851,9 @@
   
   /* Admonition Styles */
   :global(.admonition) {
-    padding: 1rem 1.25rem;
-    margin-top: 1.5em;
-    margin-bottom: 1.5em;
-    /* border-left-width: 5px; */ /* Moved to direction-specific rules */
-    /* border-left-style: solid; */ /* Moved to direction-specific rules */
+    padding: 0.75rem 1rem; /* Reduced from 1rem 1.25rem */
+    margin-top: 1em; /* Reduced from 1.5em */
+    margin-bottom: 1em; /* Reduced from 1.5em */
     border-radius: 0.375rem; /* rounded-md */
     background-color: #f9fafb; /* gray-50 */
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
@@ -762,11 +875,11 @@
 
   :global(.admonition-title) {
     font-weight: 600; /* semibold */
-    margin-bottom: 0.5rem;
-    font-size: 1.125em; /* text-lg related */
+    margin-bottom: 0.3em; /* Reduced from 0.5rem */
+    font-size: 1.0em; /* Reduced from 1.125em, now same as base text in admonition */
   }
   :global(.admonition-content) {
-    font-size: 1em;
+    font-size: 0.95em; /* Slightly smaller than base to fit padding */
   }
   :global(.admonition-content > :first-child) {
     margin-top: 0;
