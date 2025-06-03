@@ -854,7 +854,7 @@
       </header>
     {/if}
   
-    <main class="flex flex-1 overflow-hidden bg-gray-100" class:pt-0={!isReadOnly || isVerticalSplit} class:pt-safe={isReadOnly && !isVerticalSplit} dir={isRtl ? 'rtl' : 'ltr'} >
+    <main class="flex flex-1 overflow-hidden bg-gray-100" class:pt-0={!isReadOnly || isVerticalSplit} dir={isRtl ? 'rtl' : 'ltr'} >
       <ResizablePanes 
         bind:vertical={isVerticalSplit} 
         initialRatio={editorPaneInitialRatio} 
@@ -874,8 +874,8 @@
           {/if}
           <div 
             bind:this={previewEl} 
-            class="prose max-w-none {isRtl ? 'prose-rtl text-right' : 'text-left'} 
-                   {isReadOnly && !isVerticalSplit ? 'max-w-3xl mx-auto' : ''} 
+            class="prose {isRtl ? 'prose-rtl text-right' : 'text-left'} 
+                   {isReadOnly && !isVerticalSplit ? 'max-w-[65rem] mx-auto' : 'max-w-none'} 
                    w-full h-full overflow-auto" 
             style="direction: {isRtl ? 'rtl' : 'ltr'}; /* Font will be inherited from parent .flex.h-screen */"
           >
