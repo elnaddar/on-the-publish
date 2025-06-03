@@ -38,8 +38,8 @@
     // import '@fontsource/noto-sans-mono/400.css'; // REMOVED: Noto Sans Mono as it didn't work well (switched to Kawkab Mono)
 
     // Import raw markdown from files in /static/ folder (via symlinks)
-    import EN_MD_RAW from '/examples/example_en.md?raw'; // MODIFIED: Path updated
-    import AR_MD_RAW from '/examples/example_ar.md?raw'; // MODIFIED: Path updated
+    import EN_MD_RAW from '../examples/example_en.md?raw'; // MODIFIED: Path updated
+    import AR_MD_RAW from '../examples/example_ar.md?raw'; // MODIFIED: Path updated
 
     const INITIAL_MARKDOWN = '# Hello, Markdown!\n' +
       'This is a **test**.\n\n' +
