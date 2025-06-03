@@ -4,9 +4,11 @@
     import { unified } from 'unified';
     import remarkParse from 'remark-parse';
     import remarkGfm from 'remark-gfm';
+    import remarkMath from 'remark-math';
     import remarkGithubBetaBlockquoteAdmonitions from 'remark-github-beta-blockquote-admonitions';
     import remarkRehype from 'remark-rehype';
     import rehypeRaw from 'rehype-raw';
+    import rehypeMathjax from 'rehype-mathjax';
     import rehypeHighlight from 'rehype-highlight';
     import rehypeStringify from 'rehype-stringify';
     import hljs from 'highlight.js';
@@ -33,24 +35,24 @@
     import '@fontsource/noto-sans-arabic/arabic-700.css'; // Bold
     import '@fontsource/ibm-plex-mono/latin-400.css'; // Regular
 
-    const INITIAL_MARKDOWN = `# Hello, Markdown!
-  
-  This is a **test**.
-  
-  \`\`\`javascript
-  console.log("Hello World!");
-  \`\`\`
-  - One
-  - Two
-  
-  > [!NOTE]
-  > This is a note callout.
-  
-  > [!TIP]
-  > This is a tip with a custom title!
-  
-  > [!WARNING]
-  > Be careful with this warning.`;
+    const INITIAL_MARKDOWN = '# Hello, Markdown!\n' +
+      'This is a **test**.\n\n' +
+      'Inline math: $ax^2 + bx + c = 0$\n\n' +
+      'Block math:\n' +
+      '$$\n' +
+      'x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}\n' +
+      '$$\n\n' +
+      '\`\`\`javascript\n' +
+      'console.log("Hello World!");\n' +
+      '\`\`\`\n' +
+      '- One\n' +
+      '- Two\n\n' +
+      '> [!NOTE]\n' +
+      '> This is a note callout.\n\n' +
+      '> [!TIP]\n' +
+      '> This is a tip with a custom title!\n\n' +
+      '> [!WARNING]\n' +
+      '> Be careful with this warning.';
     
     let markdownInput = INITIAL_MARKDOWN;
     
@@ -67,6 +69,7 @@
     const processor = unified()
       .use(remarkParse)
       .use(remarkGfm)
+      .use(remarkMath)
       .use(remarkGithubBetaBlockquoteAdmonitions, {
         classNameMaps: {
           block: (title: string) => {
@@ -80,6 +83,7 @@
       })
       .use(remarkRehype, { allowDangerousHtml: true })
       .use(rehypeRaw) // Make sure to handle raw HTML correctly
+      .use(rehypeMathjax)
       .use(rehypeHighlight, { 
         highlight: (code: string, language: string) => {
             const lang = hljs.getLanguage(language) ? language : 'plaintext';
