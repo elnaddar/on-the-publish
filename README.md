@@ -80,9 +80,9 @@ Built with SvelteKit and Bun.
     bun run dev
     ```
     Or to open in a browser:
-    ```bash
+```bash
     bun run dev -- --open
-    ```
+```
 
 ## Building
 

@@ -35,6 +35,7 @@
     import '@fontsource/noto-sans-arabic/arabic-400.css'; // Regular
     import '@fontsource/noto-sans-arabic/arabic-700.css'; // Bold
     import '@fontsource/ibm-plex-mono/latin-400.css'; // Regular
+    import '@fontsource/noto-sans-mono/400.css'; // ADDED: Corrected path for Noto Sans Mono (regular weight)
 
     const INITIAL_MARKDOWN = '# Hello, Markdown!\n' +
       'This is a **test**.\n\n' +
@@ -1034,6 +1035,11 @@
     text-align: left;
   }
 
+  /* ADDED: Apply Noto Sans Mono to CM scroller in RTL */
+  :global(.codemirror-host.cm-rtl .cm-scroller) {
+    font-family: 'Noto Sans Mono', 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace !important;
+  }
+
   :global(.prose-rtl h1, .prose-rtl h2, .prose-rtl h3, .prose-rtl h4, .prose-rtl p, .prose-rtl ul, .prose-rtl ol, .prose-rtl blockquote) {
     text-align: right;
   }
@@ -1152,5 +1158,24 @@
 
   :global(mjx-container[jax="SVG"] > svg) {
     display: inline;
+  }
+
+  /* ADDED: @font-face for TheYearOfHandcrafts */
+  @font-face {
+    font-family: 'TheYearOfHandcrafts';
+    src: url('/fonts/TheYearOfHandcrafts.otf') format('opentype'); /* MODIFIED: Changed to .otf and format opentype */
+    font-weight: normal; /* Adjust if needed */
+    font-style: normal; /* Adjust if needed */
+    font-display: swap;
+  }
+
+  /* ADDED: Apply TheYearOfHandcrafts to RTL headings */
+  :global([dir="rtl"] .prose h1),
+  :global([dir="rtl"] .prose h2),
+  :global([dir="rtl"] .prose h3),
+  :global([dir="rtl"] .prose h4),
+  :global([dir="rtl"] .prose h5),
+  :global([dir="rtl"] .prose h6) {
+    font-family: 'TheYearOfHandcrafts', 'Noto Sans Arabic', sans-serif; /* Fallback to Noto Sans Arabic */
   }
 </style>
