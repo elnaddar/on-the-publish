@@ -35,7 +35,11 @@
     import '@fontsource/noto-sans-arabic/arabic-400.css'; // Regular
     import '@fontsource/noto-sans-arabic/arabic-700.css'; // Bold
     import '@fontsource/ibm-plex-mono/latin-400.css'; // Regular
-    // import '@fontsource/noto-sans-mono/400.css'; // REMOVED: Noto Sans Mono as it didn't work well
+    // import '@fontsource/noto-sans-mono/400.css'; // REMOVED: Noto Sans Mono as it didn't work well (switched to Kawkab Mono)
+
+    // Import raw markdown from files in /static/ folder (via symlinks)
+    import EN_MD_RAW from '/examples/example_en.md?raw'; // MODIFIED: Path updated
+    import AR_MD_RAW from '/examples/example_ar.md?raw'; // MODIFIED: Path updated
 
     const INITIAL_MARKDOWN = '# Hello, Markdown!\n' +
       'This is a **test**.\n\n' +
@@ -63,6 +67,10 @@
       '> This is a tip with a custom title!\n\n' +
       '> [!WARNING]\n' +
       '> Be careful with this warning.';
+    
+    const ENGLISH_EXAMPLE_MD = EN_MD_RAW;
+    
+    const ARABIC_EXAMPLE_MD = AR_MD_RAW;
     
     let markdownInput = INITIAL_MARKDOWN;
     
@@ -131,6 +139,7 @@
     let showRestoreDialog = false; // New state for restore dialog
     let foundSavedSession = false; // New state to indicate if a session was found
     let allowSessionSaving = false; // Gate for allowing session saves - DEFAULT FALSE
+    let showExamplesDropdown = false;
     let primeForSavingOnNextEditAfterShareLoad = false; // True if shared content just loaded, waiting for first edit
 
     let readOnlyCompartment = new Compartment();
@@ -514,6 +523,15 @@
       }
       window.addEventListener('hashchange', hashChangeHandlerInstance);
 
+      const handleClickOutside = (event: MouseEvent) => {
+        const dropdownButton = document.getElementById('examples-dropdown-button');
+        if (showExamplesDropdown && dropdownButton && !dropdownButton.contains(event.target as Node)) {
+          showExamplesDropdown = false;
+        }
+      };
+
+      document.addEventListener('click', handleClickOutside, true);
+
       return () => {
         if (cmView) {
             cmView.scrollDOM.removeEventListener('scroll', handleScroll);
@@ -525,6 +543,7 @@
         const themeLink = document.getElementById('hljs-theme-link');
         if (themeLink) themeLink.remove();
         if (hashChangeHandlerInstance) window.removeEventListener('hashchange', hashChangeHandlerInstance);
+        document.removeEventListener('click', handleClickOutside, true);
       };
     });
   
@@ -726,6 +745,61 @@
          setTimeout(() => handleScroll(), 50);
       }
     }
+
+    function loadExample(exampleMd: string, exampleIsRtl: boolean) {
+      markdownInput = exampleMd;
+      isRtl = exampleIsRtl;
+      isReadOnly = false; // Examples always make editor active
+
+      if (cmView) {
+        // Update document content
+        if (cmView.state.doc.toString() !== markdownInput) {
+          cmView.dispatch({
+            changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }
+          });
+        }
+
+        const targetDir = isRtl ? 'rtl' : 'ltr';
+        let effects: StateEffect<unknown>[] = [];
+
+        // Update readOnly state in CodeMirror
+        if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+            effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+        }
+
+        // Update direction in CodeMirror
+        // Check current direction state within CodeMirror's compartment or rely on class, then dispatch if needed.
+        // For simplicity and consistency with other parts, we'll reconfigure.
+        effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+        editorHostEl?.classList.toggle('cm-rtl', isRtl);
+        editorHostEl?.classList.toggle('cm-ltr', !isRtl);
+
+        if (effects.length > 0) {
+          cmView.dispatch({ effects });
+        }
+      } 
+      // If cmView is not initialized, reactive logic in onMount/setupCodeMirror will use the new Svelte state.
+
+      allowSessionSaving = true;
+      primeForSavingOnNextEditAfterShareLoad = false;
+      tick().then(() => {
+          if (showEditorPane) handleScroll(); // Adjust scroll after content change
+      });
+    }
+
+    function loadEnglishExample() {
+      loadExample(ENGLISH_EXAMPLE_MD, false);
+      showExamplesDropdown = false;
+    }
+
+    function loadArabicExample() {
+      loadExample(ARABIC_EXAMPLE_MD, true);
+      showExamplesDropdown = false;
+    }
+
+    function toggleExamplesDropdown() {
+      showExamplesDropdown = !showExamplesDropdown;
+    }
 </script>
 
 <!-- svelte:head must be a top-level element -->
@@ -804,6 +878,26 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
             </svg>
           </button>
+          <div class="relative">
+            <button 
+              id="examples-dropdown-button"
+              title="Load Example" 
+              on:click={toggleExamplesDropdown}
+              class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              disabled={isLoading || isReadOnly}
+            >
+              Load Example
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="ml-1 inline-block h-4 w-4 align-middle">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+              </svg>
+            </button>
+            {#if showExamplesDropdown}
+              <div class="absolute {isRtl ? 'left-0' : 'right-0'} z-20 mt-2 w-48 origin-top-right rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none dark:bg-gray-700 dark:ring-gray-600">
+                <button on:click={loadEnglishExample} class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-200 dark:hover:bg-gray-600 dark:hover:text-white">English Example</button>
+                <button on:click={loadArabicExample} class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-200 dark:hover:bg-gray-600 dark:hover:text-white">Arabic Example</button>
+              </div>
+            {/if}
+          </div>
           <select 
             class="appearance-none rounded bg-gray-700 py-2 pl-3 pr-8 text-white hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500"
             on:change={(e) => changeTheme(e)} 
