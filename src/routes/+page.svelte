@@ -139,31 +139,23 @@
     function saveSession() {
         if (typeof window !== 'undefined') {
             clearTimeout(saveTimeout);
-            saveTimeout = window.setTimeout(() => { // Debounce markdown saving
-                // Check allowSessionSaving AT THE TIME OF ACTUAL SAVING
+            saveTimeout = window.setTimeout(() => { 
                 if (!isLoading && allowSessionSaving) { 
                     try {
                         localStorage.setItem('mdEditorLastMarkdown', markdownInput);
                         localStorage.setItem('mdEditorLastRtl', JSON.stringify(isRtl));
                         localStorage.setItem('mdEditorLastTheme', currentHljsTheme);
                         localStorage.setItem('mdEditorLastVerticalSplit', JSON.stringify(isVerticalSplit));
-                        // console.log('Session actually saved (debounced):', markdownInput.substring(0,20));
                     } catch (e) {
                         console.error("Error saving session to localStorage:", e);
                     }
-                } else {
-                    // console.log('Debounced saveSession was called, but allowSessionSaving is false or isLoading is true. Not saving.');
                 }
-            }, 500); // Debounce time for markdown
+            }, 500); 
         }
     }
 
     async function loadSession() {
         if (typeof window !== 'undefined') {
-            // Initialize with current Svelte state values as defaults before trying to load
-            // This ensures that if a specific item is missing or fails to parse from localStorage,
-            // the existing Svelte state for that item (which might be INITIAL_MARKDOWN's defaults or from URL hash)
-            // isn't unnecessarily changed unless a valid value is loaded for it.
             let tempMarkdownInput = markdownInput;
             let tempIsRtl = isRtl;
             let tempCurrentHljsTheme = currentHljsTheme;
@@ -171,50 +163,36 @@
 
             try {
                 const savedMarkdown = localStorage.getItem('mdEditorLastMarkdown');
-                if (savedMarkdown !== null) {
-                    tempMarkdownInput = savedMarkdown;
-                }
+                if (savedMarkdown !== null) tempMarkdownInput = savedMarkdown;
 
                 const savedRtlString = localStorage.getItem('mdEditorLastRtl');
                 if (savedRtlString !== null) {
-                    try {
-                        tempIsRtl = JSON.parse(savedRtlString);
-                    } catch (e) {
-                        console.error("Error parsing saved RTL state from localStorage, using current value. Error:", e, "Value:", savedRtlString);
-                    }
+                    try { tempIsRtl = JSON.parse(savedRtlString); } catch (e) { /* console.error */ }
                 }
 
                 const savedTheme = localStorage.getItem('mdEditorLastTheme');
-                if (savedTheme !== null) {
-                    if (availableHljsThemes.includes(savedTheme)) {
-                        tempCurrentHljsTheme = savedTheme;
-                    } else {
-                        console.log('Saved theme not available, using current value. Saved theme:', savedTheme);
-                    }
+                if (savedTheme !== null && availableHljsThemes.includes(savedTheme)) {
+                    tempCurrentHljsTheme = savedTheme;
                 }
 
                 const savedVerticalSplitString = localStorage.getItem('mdEditorLastVerticalSplit');
                 if (savedVerticalSplitString !== null) {
-                    try {
-                        tempIsVerticalSplit = JSON.parse(savedVerticalSplitString);
-                    } catch (e) {
-                        console.error("Error parsing saved vertical split state from localStorage, using current value. Error:", e, "Value:", savedVerticalSplitString);
-                    }
+                    try { tempIsVerticalSplit = JSON.parse(savedVerticalSplitString); } catch (e) { /* console.error */ }
                 }
-
-                // Now, assign the potentially updated values back to the Svelte state variables
+                
                 markdownInput = tempMarkdownInput;
                 isRtl = tempIsRtl;
                 currentHljsTheme = tempCurrentHljsTheme;
                 isVerticalSplit = tempIsVerticalSplit;
+                isReadOnly = false;
 
             } catch (e) {
-                // This catch is for any unexpected errors during localStorage.getItem itself (e.g., security restrictions)
                 console.error("Critical error reading from localStorage during loadSession, resetting to defaults:", e);
                 markdownInput = INITIAL_MARKDOWN;
                 isRtl = false;
                 currentHljsTheme = 'default';
                 isVerticalSplit = false;
+                isReadOnly = false;
             }
         }
     }
@@ -234,7 +212,6 @@
         isRtl = false;
         currentHljsTheme = 'default';
         isVerticalSplit = false;
-        // console.log('Session cleared and editor reset');
         if (cmView) {
             setupCodeMirror(markdownInput, isReadOnly); // Re-setup CM with initial values
         } else if (showEditorPane && editorHostEl) { // If CM wasn't there but should be
@@ -329,6 +306,7 @@
       if (cmView) {
         cmView.scrollDOM.removeEventListener('scroll', handleScroll);
         cmView.destroy();
+        cmView = undefined;
       }
 
       const customKeymap = [
@@ -375,7 +353,6 @@
             if (primeForSavingOnNextEditAfterShareLoad) {
                 allowSessionSaving = true;
                 primeForSavingOnNextEditAfterShareLoad = false;
-                // console.log("First edit on shared/newly-hashed content: enabling session saving.");
             }
           }
           if (update.geometryChanged) {
@@ -422,100 +399,119 @@
     }
   
     onMount(() => {
-      let hashChangeHandler: () => Promise<void>;
+      let hashChangeHandlerInstance: () => Promise<void>;
 
       const init = async () => {
-        // isLoading = true; // isLoading is true by default
+        isLoading = true;
+        await tick();
 
         if (typeof window !== 'undefined') {
-            if (window.location.hash.startsWith('#share=')) {
-                // allowSessionSaving remains false initially for share links
-                // primeForSavingOnNextEditAfterShareLoad will be set by parseUrlHashForSharedContent
-                await proceedWithInitialization();
-                return;
+            const currentHash = window.location.hash;
+            if (currentHash.startsWith('#share=')) {
+                await parseUrlHashForSharedContent(currentHash);
+            } else {
+                const savedMarkdownExists = localStorage.getItem('mdEditorLastMarkdown');
+                if (savedMarkdownExists !== null) {
+                    foundSavedSession = true;
+                    showRestoreDialog = true;
+                    isLoading = false;
+                    return;
+                } else {
+                    markdownInput = INITIAL_MARKDOWN;
+                    isRtl = false;
+                    currentHljsTheme = 'default';
+                    isVerticalSplit = false;
+                    isReadOnly = false;
+                    allowSessionSaving = true;
+                    primeForSavingOnNextEditAfterShareLoad = false;
+                }
             }
-            
-            // Not starting on a share link.
-            const savedMarkdownExists = localStorage.getItem('mdEditorLastMarkdown');
-            if (savedMarkdownExists !== null) {
-                foundSavedSession = true;
-                showRestoreDialog = true;
-                isLoading = false; // Show dialog, hide loader
-                // allowSessionSaving remains false until user chooses from dialog and action sets it.
-                return; 
-            } 
-            // No local session, no share link. Start fresh.
-            // allowSessionSaving is still false. parseUrlHash (via proceed) will load initial content and set it to true.
-            await proceedWithInitialization();
-            
-        } else { // Should not happen in a browser environment for full init
-            await proceedWithInitialization();
+        } else {
+            markdownInput = INITIAL_MARKDOWN;
+            isRtl = false;
+            currentHljsTheme = 'default';
+            isVerticalSplit = false;
+            isReadOnly = false;
+            allowSessionSaving = true;
+            primeForSavingOnNextEditAfterShareLoad = false;
+        }
+
+        if (showEditorPane && editorHostEl) {
+            setupCodeMirror(markdownInput, isReadOnly);
+        }
+        await changeTheme(currentHljsTheme);
+        
+        isLoading = false;
+        await tick();
+        if (showEditorPane) {
+            setTimeout(() => handleScroll(), 50);
         }
       };
 
-      const proceedWithInitialization = async () => {
-        isLoading = true; // Ensure loader is shown for this part
-        await tick();
-
-        await parseUrlHashForSharedContent();
-        
-        if (showEditorPane && editorHostEl) {
-          // If markdownInput was changed by parseUrlHash, setup CM with it
-          // Otherwise, it's INITIAL_MARKDOWN or from a restored session (already handled if dialog was shown)
-          setupCodeMirror(markdownInput, isReadOnly);
-        }
-        
-        if (previewEl) { 
-          previewEl.addEventListener('scroll', handleScroll);
-        }
-        
-        await changeTheme(currentHljsTheme); 
-
-        hashChangeHandler = async () => {
-          // No dialog on hash change, directly re-process
+      hashChangeHandlerInstance = async () => {
           isLoading = true;
-          await parseUrlHashForSharedContent();
-          if (showEditorPane && editorHostEl) {
-            if (cmView) {
-                const currentCmReadOnly = cmView.state.facet(EditorState.readOnly);
-                const currentCmDirAttr = cmView.contentDOM.getAttribute('dir');
-                const targetDir = isRtl ? 'rtl' : 'ltr';
-                let effects: StateEffect<unknown>[] = [];
-                if (currentCmReadOnly !== isReadOnly) {
-                    effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
-                }
-                if (currentCmDirAttr !== targetDir) {
-                    effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
-                }
-                if (cmView.state.doc.toString() !== markdownInput) {
-                    cmView.dispatch({
-                        changes: {from: 0, to: cmView.state.doc.length, insert: markdownInput}
-                    });
-                }
-                if (effects.length > 0) {
-                    cmView.dispatch({effects});
-                }
-            } else {
-                 setupCodeMirror(markdownInput, isReadOnly);
-            }
-          } else if (!showEditorPane && cmView) {
-            cmView.scrollDOM.removeEventListener('scroll', handleScroll);
-            cmView.destroy();
+          await tick();
+
+          const newHash = window.location.hash;
+          if (newHash.startsWith('#share=')) {
+              await parseUrlHashForSharedContent(newHash);
+              if (showEditorPane && editorHostEl && !cmView) {
+                  setupCodeMirror(markdownInput, isReadOnly);
+              } else if (!showEditorPane && cmView) { 
+                  cmView.scrollDOM.removeEventListener('scroll', handleScroll);
+                  cmView.destroy();
+                  cmView = undefined;
+              }
+          } else {
+              const savedMarkdownExists = localStorage.getItem('mdEditorLastMarkdown');
+              if (savedMarkdownExists !== null) {
+                  await loadSession();
+              } else {
+                  markdownInput = INITIAL_MARKDOWN;
+                  isRtl = false;
+                  currentHljsTheme = 'default';
+                  isVerticalSplit = false;
+                  isReadOnly = false;
+              }
+              allowSessionSaving = true;
+              primeForSavingOnNextEditAfterShareLoad = false;
+
+              if (cmView) {
+                  if (cmView.state.doc.toString() !== markdownInput) {
+                       cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }});
+                  }
+                  const targetDir = isRtl ? 'rtl' : 'ltr';
+                  let effects: StateEffect<unknown>[] = [];
+                  if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+                      effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+                  }
+                  if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
+                      effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+                      editorHostEl?.classList.toggle('cm-rtl', isRtl);
+                      editorHostEl?.classList.toggle('cm-ltr', !isRtl);
+                  }
+                  if (effects.length > 0) cmView.dispatch({effects});
+
+              } else if (showEditorPane && editorHostEl) {
+                  setupCodeMirror(markdownInput, isReadOnly);
+              }
           }
+          
           await changeTheme(currentHljsTheme);
+          
           isLoading = false;
           await tick();
-          if (showEditorPane) handleScroll();
-        };
-
-        window.addEventListener('hashchange', hashChangeHandler);
-
-        isLoading = false;
-        await tick();
-        if (showEditorPane) handleScroll();
+          if (showEditorPane) {
+            setTimeout(() => handleScroll(), 50);
+          }
       };
 
       init();
+
+      if (previewEl) {
+          previewEl.addEventListener('scroll', handleScroll);
+      }
+      window.addEventListener('hashchange', hashChangeHandlerInstance);
 
       return () => {
         if (cmView) {
@@ -524,133 +520,99 @@
         }
         if (previewEl) previewEl.removeEventListener('scroll', handleScroll);
         clearTimeout(scrollTimeout);
-        clearTimeout(saveTimeout); // Clear save timeout on destroy
+        clearTimeout(saveTimeout);
         const themeLink = document.getElementById('hljs-theme-link');
         if (themeLink) themeLink.remove();
-        if (hashChangeHandler) window.removeEventListener('hashchange', hashChangeHandler);
+        if (hashChangeHandlerInstance) window.removeEventListener('hashchange', hashChangeHandlerInstance);
       };
     });
   
-    function parseUrlHashForSharedContent(): Promise<void> {
-      return new Promise<void>(async (resolve) => {
-        if (typeof window !== 'undefined') {
-          const hash = window.location.hash;
-          if (hash.startsWith('#share=')) {
-            try {
-              const encodedData = hash.substring('#share='.length);
-              const compressedString = atob(encodedData); 
-              const compressedDataArr = new Uint8Array(compressedString.length);
-              for (let i = 0; i < compressedString.length; i++) {
+    async function parseUrlHashForSharedContent(currentHash: string): Promise<void> {
+        try {
+            const encodedData = currentHash.substring('#share='.length);
+            const compressedString = atob(encodedData); 
+            const compressedDataArr = new Uint8Array(compressedString.length);
+            for (let i = 0; i < compressedString.length; i++) {
                 compressedDataArr[i] = compressedString.charCodeAt(i);
-              }
-    
-              const jsonString = pako.inflate(compressedDataArr, { to: 'string' });
-              const sharedData = JSON.parse(jsonString);
-    
-              let newMarkdownInput = INITIAL_MARKDOWN; // Default if not in shared data
-              let newIsRtl = false;
-              let newCurrentHljsTheme = 'default';
-              let newIsReadOnly = false;
+            }
+            const jsonString = pako.inflate(compressedDataArr, { to: 'string' });
+            const sharedData = JSON.parse(jsonString);
 
-              if (sharedData.markdown) newMarkdownInput = sharedData.markdown;
-              if (sharedData.options) {
+            let newMarkdownInput = INITIAL_MARKDOWN;
+            let newIsRtl = false;
+            let newCurrentHljsTheme = 'default';
+            let newIsReadOnly = false;
+
+            if (sharedData.markdown) newMarkdownInput = sharedData.markdown;
+            if (sharedData.options) {
                 newIsRtl = sharedData.options.rtl === true;
                 if (sharedData.options.theme && availableHljsThemes.includes(sharedData.options.theme)) {
-                  newCurrentHljsTheme = sharedData.options.theme;
+                    newCurrentHljsTheme = sharedData.options.theme;
                 }
                 newIsReadOnly = sharedData.options.readOnly === true; 
-              }
-              
-              markdownInput = newMarkdownInput;
-              isRtl = newIsRtl;
-              currentHljsTheme = newCurrentHljsTheme;
-              isReadOnly = newIsReadOnly;
-              
-              if (cmView) {
-                 const currentDoc = cmView.state.doc.toString();
-                 if (currentDoc !== markdownInput) {
+            }
+            
+            markdownInput = newMarkdownInput;
+            isRtl = newIsRtl;
+            currentHljsTheme = newCurrentHljsTheme;
+            isReadOnly = newIsReadOnly;
+            
+            if (cmView) {
+                const currentCmDoc = cmView.state.doc.toString();
+                if (currentCmDoc !== markdownInput) {
                     cmView.dispatch({
                         changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }
                     });
-                 }
-                 // Ensure CM readOnly and direction are also updated for shared content
-                  const targetDir = isRtl ? 'rtl' : 'ltr';
-                  let effects: StateEffect<unknown>[] = [];
-                  if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+                }
+                const targetDir = isRtl ? 'rtl' : 'ltr';
+                let effects: StateEffect<unknown>[] = [];
+                if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
                     effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
-                  }
-                  if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
+                }
+                if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
                     effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
-                  }
-                  if (effects.length > 0) cmView.dispatch({effects});
-
-              } else if (showEditorPane && editorHostEl) { 
-                 setupCodeMirror(markdownInput, isReadOnly);
-              }
-              await changeTheme(currentHljsTheme);
-
-              allowSessionSaving = false; // Explicitly disable saving for fresh shared content
-              primeForSavingOnNextEditAfterShareLoad = true;
-
-            } catch (e) {
-              console.error("Error parsing shared link data:", e);
-              alert("Could not load shared content. The link might be corrupted or invalid.");
-              // Fallback: clear potential prime flag, enable saving for whatever is current (likely initial/default)
-              primeForSavingOnNextEditAfterShareLoad = false;
-              allowSessionSaving = true; 
+                    editorHostEl?.classList.toggle('cm-rtl', isRtl);
+                    editorHostEl?.classList.toggle('cm-ltr', !isRtl);
+                }
+                if (effects.length > 0) cmView.dispatch({effects});
             }
-          } else {
-            // No share hash. This means we either started on a non-share URL,
-            // or navigated away from a share URL.
+
+            allowSessionSaving = false;
+            primeForSavingOnNextEditAfterShareLoad = true;
+
+        } catch (e) {
+            console.error("Error parsing shared link data:", e);
+            alert("Could not load shared content. The link might be corrupted or invalid. Loading default content.");
+            markdownInput = INITIAL_MARKDOWN;
+            isRtl = false;
+            currentHljsTheme = 'default';
+            isVerticalSplit = false; 
+            isReadOnly = false;
+            
+            allowSessionSaving = true;
             primeForSavingOnNextEditAfterShareLoad = false;
 
-            if (!allowSessionSaving) {
-                // This implies we were on a share link, didn't edit (so saving was off),
-                // and navigated away. Or it's an initial load without a session/share link.
-                // Load local session or initial content.
-                const savedMarkdownExists = localStorage.getItem('mdEditorLastMarkdown');
-                if (savedMarkdownExists !== null) {
-                    await loadSession(); // This loads all session parts into Svelte vars
-                } else {
-                    markdownInput = INITIAL_MARKDOWN;
-                    isRtl = false; 
-                    currentHljsTheme = 'default';
-                    isVerticalSplit = false;
-                    isReadOnly = false; 
-                }
-                
-                if (cmView) {
-                    if (cmView.state.doc.toString() !== markdownInput) {
-                        cmView.dispatch({
-                            changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }
-                        });
-                    }
-                    const targetDir = isRtl ? 'rtl' : 'ltr';
-                    let effects: StateEffect<unknown>[] = [];
-                    if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
-                        effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
-                    }
-                    if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
-                        effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
-                    }
-                    if (effects.length > 0) cmView.dispatch({effects});
-                } else if (showEditorPane && editorHostEl) {
-                    setupCodeMirror(markdownInput, isReadOnly);
-                }
-                await changeTheme(currentHljsTheme); 
+            if (cmView) {
+                 if (cmView.state.doc.toString() !== markdownInput) {
+                    cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput }});
+                 }
+                 const targetDir = isRtl ? 'rtl' : 'ltr';
+                 let effects: StateEffect<unknown>[] = [];
+                 if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) {
+                    effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
+                 }
+                 if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
+                    effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+                    editorHostEl?.classList.toggle('cm-rtl', isRtl);
+                    editorHostEl?.classList.toggle('cm-ltr', !isRtl);
+                 }
+                 if (effects.length > 0) cmView.dispatch({effects});
             }
-            // Now that we're on a non-share page, and content is settled, saving should be active.
-            await tick(); // Ensure all state changes are processed before enabling saving
-            allowSessionSaving = true;
-          }
         }
-        resolve();
-      });
     }
   
-    let htmlOutput = ''; // Initialize htmlOutput
+    let htmlOutput = '';
 
-    // Reactive statement to update htmlOutput when markdownInput changes
     $: (async () => {
       if (typeof markdownInput === 'string') {
         try {
@@ -666,85 +628,66 @@
     $: showEditorPane = !isReadOnly || showEditorPaneInReadOnly;
     $: editorPaneInitialRatio = showEditorPane ? 0.5 : 0;
 
-    $: if (cmView && typeof window !== 'undefined') {
-        let effects: StateEffect<unknown>[] = [];
-        const currentCmReadOnly = cmView.state.facet(EditorState.readOnly);
-        const currentCmDirAttr = cmView.contentDOM.getAttribute('dir');
-        const targetDir = isRtl ? 'rtl' : 'ltr';
-
-        if (currentCmReadOnly !== isReadOnly) {
-            effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
-        }
-        if (currentCmDirAttr !== targetDir) {
-            effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
-            editorHostEl?.classList.toggle('cm-rtl', isRtl);
-            editorHostEl?.classList.toggle('cm-ltr', !isRtl);
-        }
-
-        if (effects.length > 0) {
-            cmView.dispatch({ effects });
-        }
-    }
-    
-    // Ensure CodeMirror is created/destroyed when showEditorPane changes, especially if it wasn't due to isReadOnly change
     $: if (typeof window !== 'undefined' && editorHostEl ) {
         if (showEditorPane && !cmView) {
             setupCodeMirror(markdownInput, isReadOnly);
-        } else if (!showEditorPane && cmView) {
+        } else if (!showEditorPane && cmView) { 
             cmView.scrollDOM.removeEventListener('scroll', handleScroll);
             cmView.destroy();
+            cmView = undefined;
         }
     }
     
-    // Update CodeMirror text content if markdownInput changes from external sources (already handled in parseUrlHash)
-
-    $: if (typeof window !== 'undefined') { // Reactive session saving (excluding markdownInput here, handled by debounced saveSession)
-        if (!isLoading && allowSessionSaving) { // Added allowSessionSaving
-          saveSession(); // This will now debounce markdown, but save others immediately if not also debounced
+    $: if (typeof window !== 'undefined') {
+        if (!isLoading && allowSessionSaving) {
+          saveSession(); 
         }
     }
     
-    // Separate reactive statement for markdownInput for debounced saving
-    $: if (typeof markdownInput === 'string' && typeof window !== 'undefined' && !isLoading && allowSessionSaving) { // Added allowSessionSaving
+    $: if (typeof markdownInput === 'string' && typeof window !== 'undefined' && !isLoading && allowSessionSaving) {
         saveSession(); 
     }
 
     async function actionRestoreSession() {
       showRestoreDialog = false;
       isLoading = true;
-      await tick(); // Allow UI to update (hide dialog, show loader)
+      await tick(); 
 
-      await loadSession(); // Load data into Svelte state
-      // No longer calling parseUrlHashForSharedContent here.
-      // URL hash priority is handled by init onMount and the hashchange listener.
+      await loadSession(); 
+      isReadOnly = false;
 
       if (showEditorPane && editorHostEl) {
         if (cmView) {
-          // Update CM with restored content
           if (cmView.state.doc.toString() !== markdownInput) {
             cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: markdownInput } });
           }
           const targetDir = isRtl ? 'rtl' : 'ltr';
           let effects: StateEffect<unknown>[] = [];
-          if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) { // isReadOnly from restored session
+          if (cmView.state.facet(EditorState.readOnly) !== isReadOnly) { 
             effects.push(readOnlyCompartment.reconfigure(EditorState.readOnly.of(isReadOnly)));
           }
           if (cmView.contentDOM.getAttribute('dir') !== targetDir) {
             effects.push(directionCompartment.reconfigure(EditorView.contentAttributes.of({ dir: targetDir })));
+            editorHostEl?.classList.toggle('cm-rtl', isRtl);
+            editorHostEl?.classList.toggle('cm-ltr', !isRtl);
           }
           if (effects.length > 0) cmView.dispatch({effects});
         } else {
           setupCodeMirror(markdownInput, isReadOnly);
         }
       } else if (!showEditorPane && cmView) { 
+        cmView.scrollDOM.removeEventListener('scroll', handleScroll);
         cmView.destroy();
+        cmView = undefined;
       }
       await changeTheme(currentHljsTheme);
       isLoading = false;
       allowSessionSaving = true; 
       primeForSavingOnNextEditAfterShareLoad = false;
       await tick();
-      if (showEditorPane) handleScroll();
+      if (showEditorPane) {
+        setTimeout(() => handleScroll(), 50);
+      }
     }
 
     async function actionStartNewSession() {
@@ -757,23 +700,22 @@
       currentHljsTheme = 'default';
       isVerticalSplit = false;
       isReadOnly = false; 
-      // No longer calling parseUrlHashForSharedContent here.
 
       if (showEditorPane && editorHostEl) {
-        if (cmView) { 
-            setupCodeMirror(markdownInput, isReadOnly); 
-        } else {
-            setupCodeMirror(markdownInput, isReadOnly);
-        }
-      } else if (!showEditorPane && cmView) {
+        setupCodeMirror(markdownInput, isReadOnly); 
+      } else if (!showEditorPane && cmView) { 
+         cmView.scrollDOM.removeEventListener('scroll', handleScroll);
          cmView.destroy();
+         cmView = undefined;
       }
       await changeTheme(currentHljsTheme);
       isLoading = false;
       allowSessionSaving = true; 
       primeForSavingOnNextEditAfterShareLoad = false;
       await tick();
-      if (showEditorPane) handleScroll();
+      if (showEditorPane) {
+         setTimeout(() => handleScroll(), 50);
+      }
     }
 </script>
 
