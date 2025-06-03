@@ -612,15 +612,23 @@
     }
   
     let htmlOutput = '';
+    let activeMarkdownProcessingVersion = 0;
 
     $: (async () => {
-      if (typeof markdownInput === 'string') {
+      const processingVersion = ++activeMarkdownProcessingVersion;
+      const currentInput = markdownInput;
+
+      if (typeof currentInput === 'string') {
         try {
-          const file = await processor.process(markdownInput);
-          htmlOutput = String(file);
+          const file = await processor.process(currentInput);
+          if (processingVersion === activeMarkdownProcessingVersion) {
+            htmlOutput = String(file);
+          }
         } catch (error) {
-          console.error("Error processing markdown:", error);
-          htmlOutput = "<p>Error processing Markdown. Check console for details.</p>";
+          console.error("Error processing markdown:", error, "Input snippet:", currentInput.substring(0,100));
+          if (processingVersion === activeMarkdownProcessingVersion) {
+            htmlOutput = "<p>Error processing Markdown. Check console for details.</p>";
+          }
         }
       }
     })();
