@@ -1,2 +1,0 @@
-import{_ as e,z as s,a5 as o,A as i,a6 as g}from"./B77B_WiZ.js";import{p}from"./DPfuu97F.js";var v={parse:e(async a=>{const r=await p("info",a);s.debug(r)},"parse")},d={version:g.version},c=e(()=>d.version,"getVersion"),m={getVersion:c},f=e((a,r,n)=>{s.debug(`rendering info diagram
-`+a);const t=o(r);i(t,100,400,!0),t.append("g").append("text").attr("x",100).attr("y",40).attr("class","version").attr("font-size",32).style("text-anchor","middle").text(`v${n}`)},"draw"),l={draw:f},b={parser:v,db:m,renderer:l};export{b as diagram};
