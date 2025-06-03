@@ -5,6 +5,7 @@
     import remarkParse from 'remark-parse';
     import remarkGfm from 'remark-gfm';
     import remarkMath from 'remark-math';
+    import remarkMermaid from 'remark-mermaidjs';
     import remarkGithubBetaBlockquoteAdmonitions from 'remark-github-beta-blockquote-admonitions';
     import remarkRehype from 'remark-rehype';
     import rehypeRaw from 'rehype-raw';
@@ -44,7 +45,15 @@
       '$$\n\n' +
       '\`\`\`javascript\n' +
       'console.log("Hello World!");\n' +
-      '\`\`\`\n' +
+      '\`\`\`\n\n' +
+      'A simple diagram:\n' +
+      '\`\`\`mermaid\n' +
+      'graph TD;\n' +
+      '    A-->B;\n' +
+      '    A-->C;\n' +
+      '    B-->D;\n' +
+      '    C-->D;\n' +
+      '\`\`\`\n\n' +
       '- One\n' +
       '- Two\n\n' +
       '> [!NOTE]\n' +
@@ -70,6 +79,7 @@
       .use(remarkParse)
       .use(remarkGfm)
       .use(remarkMath)
+      .use(remarkMermaid)
       .use(remarkGithubBetaBlockquoteAdmonitions, {
         classNameMaps: {
           block: (title: string) => {
@@ -1187,5 +1197,9 @@
   }
   :global(.admonition-caution .admonition-title) {
     color: #b91c1c; /* red-700 */
+  }
+
+  :global(mjx-container[jax="SVG"] > svg) {
+    display: inline;
   }
 </style>
