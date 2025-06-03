@@ -825,6 +825,7 @@
         minLeftPixels={showEditorPane ? (isVerticalSplit ? 50 : 100) : 0} 
         minRightPixels={isVerticalSplit ? 50 : 100}
         disableResizer={isReadOnly}
+        isRtl={isRtl}
       >
         <div slot="left" class="pane-a h-full w-full overflow-auto bg-white" style="{showEditorPane ? '' : 'display: none;'} /* Font will be inherited from parent .flex.h-screen */">
           {#if !isReadOnly && !isVerticalSplit && showEditorPane}

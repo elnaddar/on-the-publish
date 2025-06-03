@@ -7,6 +7,7 @@
 	export let minRightPixels = 50; // Minimum size in pixels for the right/bottom pane
 	export let vertical = false; // false for horizontal split, true for vertical
 	export let disableResizer = false; // New prop to disable resizing
+	export let isRtl = false; // ADDED: RTL mode flag
 
 	let containerEl: HTMLDivElement;
 	let leftPaneEl: HTMLDivElement;
@@ -95,7 +96,10 @@
 				console.warn('ResizablePanes: Container width is 0, cannot calculate ratio.');
 				return;
 			}
-			const newLeftWidth = clientX - containerRect.left;
+			let newLeftWidth = clientX - containerRect.left;
+			if (isRtl) { // ADDED: In RTL, invert the calculation relative to container width
+				newLeftWidth = containerRect.width - (clientX - containerRect.left);
+			}
 			newRatio = newLeftWidth / containerRect.width;
 
 			const calculatedLeftSize = newRatio * containerRect.width;
@@ -211,10 +215,15 @@
 			let step = 0.01;
 			if (e.shiftKey) step = 0.1;
 
-			if (e.key === 'ArrowLeft' && !vertical) currentRatio = Math.max(0, currentRatio - step);
-			else if (e.key === 'ArrowRight' && !vertical) currentRatio = Math.min(1, currentRatio + step);
-			else if (e.key === 'ArrowUp' && vertical) currentRatio = Math.max(0, currentRatio - step);
-			else if (e.key === 'ArrowDown' && vertical) currentRatio = Math.min(1, currentRatio + step);
+			if (e.key === 'ArrowLeft' && !vertical) { // MODIFIED: Adjust arrow key logic for RTL
+				currentRatio = Math.max(0, currentRatio - (isRtl ? -step : step));
+			} else if (e.key === 'ArrowRight' && !vertical) { // MODIFIED: Adjust arrow key logic for RTL
+				currentRatio = Math.min(1, currentRatio + (isRtl ? -step : step));
+			} else if (e.key === 'ArrowUp' && vertical) {
+				currentRatio = Math.max(0, currentRatio - step);
+			} else if (e.key === 'ArrowDown' && vertical) {
+				currentRatio = Math.min(1, currentRatio + step);
+			}
 		}}
 	></div>
 	<div
