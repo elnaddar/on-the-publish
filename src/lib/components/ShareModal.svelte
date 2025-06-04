@@ -13,6 +13,24 @@
 	let isShareRtl: boolean = initialRtl;
 	let shareTheme: string = initialTheme;
 	let generatedLink = '';
+	let isShortenUrlEnabled = false;
+	let isShortening = false;
+	let actualLinkToDisplay = ''; // Will hold either generatedLink or shortenedLink
+	let toastMessage = '';
+	let toastTimeout: number | undefined = undefined;
+	let showApiLimitsInfo = false;
+
+	function showToast(message: string, duration: number = 3000) {
+		toastMessage = message;
+		clearTimeout(toastTimeout);
+		toastTimeout = window.setTimeout(() => {
+			toastMessage = '';
+		}, duration);
+	}
+
+	function checkInternetConnection(): boolean {
+		return navigator.onLine;
+	}
 
 	function generateLink() {
 		const dataToShare = {
@@ -45,22 +63,99 @@
 		}
 	}
 
+	async function generateLinkAndUpdateDisplay() {
+		generateLink();
+
+		if (isShortenUrlEnabled) {
+			if (!checkInternetConnection()) {
+				showToast('No internet connection. Cannot shorten URL.');
+				isShortenUrlEnabled = false; // Turn off switch
+				actualLinkToDisplay = generatedLink;
+				return;
+			}
+			isShortening = true;
+			showApiLimitsInfo = true; // Show limits when trying to shorten
+			try {
+				const response = await fetch('https://spoo.me/', {
+					method: 'POST',
+					headers: {
+						Accept: 'application/json',
+						'Content-Type': 'application/x-www-form-urlencoded'
+					},
+					body: new URLSearchParams({ url: generatedLink })
+				});
+
+				if (response.ok) {
+					const data = await response.json();
+					actualLinkToDisplay = data.short_url;
+					showToast('URL shortened successfully!');
+				} else if (response.status === 429) {
+					showToast('Spoo.me API rate limit reached. Using original URL.', 5000);
+					isShortenUrlEnabled = false; // Turn off switch
+					actualLinkToDisplay = generatedLink;
+				} else {
+					const errorText = await response.text();
+					showToast(`Failed to shorten URL (Error ${response.status}). Using original URL.`, 5000);
+					console.error('Spoo.me API error:', errorText);
+					isShortenUrlEnabled = false; // Turn off switch
+					actualLinkToDisplay = generatedLink;
+				}
+			} catch (error) {
+				showToast('Error connecting to URL shortener. Using original URL.', 5000);
+				console.error('Network or other error:', error);
+				isShortenUrlEnabled = false; // Turn off switch
+				actualLinkToDisplay = generatedLink;
+			} finally {
+				isShortening = false;
+			}
+		} else {
+			actualLinkToDisplay = generatedLink;
+			showApiLimitsInfo = false;
+		}
+	}
+
 	function copyLink() {
-		if (navigator.clipboard && generatedLink) {
+		if (navigator.clipboard && actualLinkToDisplay && !actualLinkToDisplay.startsWith('Error')) {
 			navigator.clipboard
-				.writeText(generatedLink)
-				.then(() => alert('Link copied to clipboard!'))
-				.catch((err) => console.error('Failed to copy link: ', err));
+				.writeText(actualLinkToDisplay)
+				.then(() => showToast('Link copied to clipboard!'))
+				.catch((err) => {
+					console.error('Failed to copy link: ', err);
+					showToast('Failed to copy link.', 3000);
+				});
 		}
 	}
 
 	onMount(() => {
-		generateLink(); // Generate link initially
+		generateLinkAndUpdateDisplay(); // Generate link initially
 	});
 
 	// Regenerate link when options change
 	$: if (markdownInput || isEditable || isShareRtl || shareTheme) {
-		generateLink();
+		if (isShortenUrlEnabled) {
+			// If shorten was on, changing options should reset it
+			isShortenUrlEnabled = false;
+			showApiLimitsInfo = false;
+		}
+		generateLinkAndUpdateDisplay();
+	}
+
+	$: if (
+		isShortenUrlEnabled &&
+		!isShortening &&
+		actualLinkToDisplay !== generatedLink &&
+		!generatedLink.startsWith('Error')
+	) {
+		// If toggled ON, and we don't already have a short link for the current generatedLink
+		generateLinkAndUpdateDisplay();
+	} else if (!isShortenUrlEnabled && !isShortening) {
+		// If toggled OFF
+		if (actualLinkToDisplay !== generatedLink) {
+			// only update if we were showing a short link
+			actualLinkToDisplay = generatedLink;
+			showToast('URL shortening disabled.', 2000);
+		}
+		showApiLimitsInfo = false;
 	}
 </script>
 
@@ -118,6 +213,24 @@
 					{/each}
 				</select>
 			</div>
+
+			<!-- Shorten URL Switch -->
+			<div>
+				<label class="flex items-center space-x-2 pt-4">
+					<input
+						type="checkbox"
+						bind:checked={isShortenUrlEnabled}
+						class="form-checkbox h-5 w-5 text-blue-600"
+						disabled={isShortening || generatedLink.startsWith('Error')}
+					/>
+					<span>Shorten generated URL {isShortening ? '(Working...)' : ''}</span>
+				</label>
+				{#if isShortenUrlEnabled || showApiLimitsInfo}
+					<p class="ml-7 text-sm text-gray-500 {generatedLink.startsWith('Error') ? 'hidden' : ''}">
+						Using spoo.me (Limits: 5/min, 50/hour, 500/day).
+					</p>
+				{/if}
+			</div>
 		</div>
 
 		<div class="mb-4">
@@ -127,11 +240,20 @@
 			<textarea
 				id="generatedLinkTextarea"
 				readonly
-				bind:value={generatedLink}
+				bind:value={actualLinkToDisplay}
 				class="h-24 w-full resize-none rounded-md border border-gray-300 bg-gray-50 p-2 font-mono text-xs"
 				aria-label="Generated Shareable Link"
 			></textarea>
 		</div>
+
+		<!-- Toast Message Area -->
+		{#if toastMessage}
+			<div
+				class="mb-4 rounded-md bg-slate-700 p-3 text-center text-sm text-white shadow-lg transition-all duration-300 ease-in-out"
+			>
+				{toastMessage}
+			</div>
+		{/if}
 
 		<div class="flex justify-end space-x-3">
 			<button
@@ -143,11 +265,10 @@
 			<button
 				on:click={copyLink}
 				class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-				disabled={!generatedLink || generatedLink.startsWith('Error')}
+				disabled={!actualLinkToDisplay || actualLinkToDisplay.startsWith('Error') || isShortening}
 			>
 				Copy Link
 			</button>
 		</div>
 	</div>
 </div>
- 
