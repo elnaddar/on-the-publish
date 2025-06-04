@@ -64,53 +64,64 @@
 	}
 
 	async function generateLinkAndUpdateDisplay() {
-		generateLink();
+		generateLink(); // Step 1: Always ensure the base `generatedLink` is current.
 
 		if (isShortenUrlEnabled) {
+			// Step 2: Attempt to shorten if the switch is ON.
+			if (generatedLink.startsWith('Error')) {
+				// This case should have been caught by the reactive logic already, turning switch off.
+				// If somehow reached here, ensure UI consistency.
+				actualLinkToDisplay = generatedLink;
+				isShortenUrlEnabled = false; // Corrects the switch state.
+				return;
+			}
 			if (!checkInternetConnection()) {
 				showToast('No internet connection. Cannot shorten URL.');
 				isShortenUrlEnabled = false; // Turn off switch
 				actualLinkToDisplay = generatedLink;
 				return;
 			}
+
 			isShortening = true;
-			showApiLimitsInfo = true; // Show limits when trying to shorten
+			// API limits text visibility is handled by the template based on `isShortenUrlEnabled`.
 			try {
-				const response = await fetch('https://spoo.me/', {
-					method: 'POST',
+				const response = await fetch("https://spoo.me/", {
+					method: "POST",
 					headers: {
-						Accept: 'application/json',
-						'Content-Type': 'application/x-www-form-urlencoded'
+						"Accept": "application/json",
+						"Content-Type": "application/x-www-form-urlencoded",
 					},
-					body: new URLSearchParams({ url: generatedLink })
+					body: new URLSearchParams({ url: generatedLink }),
 				});
 
 				if (response.ok) {
 					const data = await response.json();
 					actualLinkToDisplay = data.short_url;
-					showToast('URL shortened successfully!');
+					showToast("URL shortened successfully!");
+					// isShortenUrlEnabled remains true, API limits text remains visible.
 				} else if (response.status === 429) {
-					showToast('Spoo.me API rate limit reached. Using original URL.', 5000);
-					isShortenUrlEnabled = false; // Turn off switch
+					showToast("Spoo.me API rate limit reached. Using original URL.", 5000);
+					isShortenUrlEnabled = false; // Turn off switch, API limits text will hide.
 					actualLinkToDisplay = generatedLink;
 				} else {
 					const errorText = await response.text();
 					showToast(`Failed to shorten URL (Error ${response.status}). Using original URL.`, 5000);
-					console.error('Spoo.me API error:', errorText);
-					isShortenUrlEnabled = false; // Turn off switch
+					console.error("Spoo.me API error:", errorText);
+					isShortenUrlEnabled = false; // Turn off switch, API limits text will hide.
 					actualLinkToDisplay = generatedLink;
 				}
 			} catch (error) {
-				showToast('Error connecting to URL shortener. Using original URL.', 5000);
-				console.error('Network or other error:', error);
-				isShortenUrlEnabled = false; // Turn off switch
+				showToast("Error connecting to URL shortener. Using original URL.", 5000);
+				console.error("Network or other error:", error);
+				isShortenUrlEnabled = false; // Turn off switch, API limits text will hide.
 				actualLinkToDisplay = generatedLink;
 			} finally {
 				isShortening = false;
 			}
 		} else {
+			// Step 3: If switch is OFF, just ensure long link is displayed.
 			actualLinkToDisplay = generatedLink;
-			showApiLimitsInfo = false;
+			// API limits text will be hidden by template condition.
 		}
 	}
 
@@ -132,50 +143,41 @@
 
 	// Regenerate link when options change
 	$: if (markdownInput || isEditable || isShareRtl || shareTheme) {
-		// If any of the core options change, we must regenerate the base link.
-		// If shortening was enabled, we'll disable it to force the user to re-opt-in for the new URL.
-		const wasShorteningEnabled = isShortenUrlEnabled;
+		const wasShorteningPreviouslyEnabled = isShortenUrlEnabled;
 		if (isShortenUrlEnabled) {
-			isShortenUrlEnabled = false; // This will trigger the reactive block below to reset display and hide API limits.
+			isShortenUrlEnabled = false; // Resets the switch, will trigger 'else' block of reactive logic
 		}
-		generateLinkAndUpdateDisplay(); // This will now generate the new long link and update the display.
-		// Since isShortenUrlEnabled is false, no shortening attempt will be made here.
-		if (wasShorteningEnabled) {
-			// Optionally, inform the user that shortening was disabled.
-			// The reactive block for isShortenUrlEnabled=false will show "URL shortening disabled."
-		}
+		generateLinkAndUpdateDisplay(); // Regenerate base link, actualLinkToDisplay will be updated.
+									// If wasShorteningPreviouslyEnabled was true, the user gets a toast from the reactive 'else' block.
 	}
 
-	// Handle manual toggling of the shorten checkbox and its effects
+	// Handle manual toggling of the shorten switch and its effects
 	$: if (isShortenUrlEnabled) {
-		// Checkbox is checked or programmatically set to true
-		if (!isShortening && !generatedLink.startsWith('Error')) {
-			// If not already in the process of shortening and the base link is valid,
-			// attempt to shorten. generateLinkAndUpdateDisplay will handle API call & UI updates.
+		// Switch is turned ON
+		if (generatedLink.startsWith('Error')) {
+			showToast('Cannot shorten: Base link has an error.', 3000);
+			isShortenUrlEnabled = false; // Immediately turn it back off
+		} else if (!isShortening) {
+			// If not already busy and base link is okay, proceed to shorten.
 			generateLinkAndUpdateDisplay();
-		} else if (generatedLink.startsWith('Error')) {
-			// If the base link itself has an error, we can't shorten.
-			// Force uncheck the checkbox and notify the user.
-			isShortenUrlEnabled = false; // This will trigger the 'else' block below.
-			showToast('Cannot shorten: Fix error in generating base link first.', 3000);
 		}
-		// If 'isShortening' is true, it means an operation is in progress.
-		// generateLinkAndUpdateDisplay() is already running and will update UI upon completion/failure.
-		// No further action needed in this reactive step for that case.
+		// If isShortening is true, an operation is already in progress. No action here.
+		// showApiLimitsInfo is effectively controlled by the template based on isShortenUrlEnabled.
+
 	} else {
-		// Checkbox is unchecked or programmatically set to false
-		if (!isShortening) {
-			// Only proceed if not in the middle of a shortening attempt
-			if (actualLinkToDisplay !== generatedLink && !generatedLink.startsWith('Error')) {
-				// If we were displaying a shortened URL, and the base link is fine, revert to the long link.
+		// Switch is turned OFF (either by user or programmatically)
+		if (!isShortening) { // Only act if not in the middle of an operation
+			const currentlyShowingShortened = actualLinkToDisplay !== generatedLink && !generatedLink.startsWith('Error');
+			if (currentlyShowingShortened) {
 				actualLinkToDisplay = generatedLink;
 				showToast('URL shortening disabled.', 2000);
-			} else if (generatedLink.startsWith('Error') && actualLinkToDisplay !== generatedLink) {
-				// If the base link is an error, ensure we are displaying that error.
+			} else if (actualLinkToDisplay !== generatedLink && generatedLink.startsWith('Error')) {
+				// Ensure error message is shown if that's the base link
 				actualLinkToDisplay = generatedLink;
+			} else if (actualLinkToDisplay === generatedLink) {
+				// Already showing long link, no toast needed unless it was just programmatically turned off
 			}
-			// When shortening is disabled, API limits info should not be shown based on this explicit state.
-			showApiLimitsInfo = false;
+			// showApiLimitsInfo is handled by the template based on isShortenUrlEnabled being false.
 		}
 	}
 </script>
@@ -236,18 +238,25 @@
 			</div>
 
 			<!-- Shorten URL Switch -->
-			<div>
-				<label class="flex items-center space-x-2 pt-4">
-					<input
-						type="checkbox"
-						bind:checked={isShortenUrlEnabled}
-						class="form-checkbox h-5 w-5 text-blue-600"
-						disabled={isShortening || generatedLink.startsWith('Error')}
-					/>
-					<span>Shorten generated URL {isShortening ? '(Working...)' : ''}</span>
+			<div class="pt-4">
+				<label class="flex items-center cursor-pointer select-none" for="shortenUrlToggle">
+					<div class="relative">
+						<input
+							id="shortenUrlToggle"
+							type="checkbox"
+							bind:checked={isShortenUrlEnabled}
+							class="sr-only peer"
+							disabled={isShortening} 
+						/>
+						<div class="block h-7 w-12 rounded-full bg-gray-300 peer-checked:bg-blue-500 transition"></div>
+						<div class="dot absolute left-1 top-1 h-5 w-5 rounded-full bg-white transition-transform duration-200 ease-in-out peer-checked:translate-x-full"></div>
+					</div>
+					<span class="ml-3 text-sm text-gray-700">
+						Shorten generated URL {isShortening ? '(Working...)' : ''}
+					</span>
 				</label>
-				{#if isShortenUrlEnabled || showApiLimitsInfo}
-					<p class="ml-7 text-sm text-gray-500 {generatedLink.startsWith('Error') ? 'hidden' : ''}">
+				{#if isShortenUrlEnabled && !generatedLink.startsWith('Error')}
+					<p class="ml-[3.25rem] text-xs text-gray-500 mt-1">
 						Using spoo.me (Limits: 5/min, 50/hour, 500/day).
 					</p>
 				{/if}
@@ -269,9 +278,7 @@
 
 		<!-- Toast Message Area -->
 		{#if toastMessage}
-			<div
-				class="mb-4 rounded-md bg-slate-700 p-3 text-center text-sm text-white shadow-lg transition-all duration-300 ease-in-out"
-			>
+			<div class="mb-4 rounded-md bg-slate-700 p-3 text-center text-sm text-white shadow-lg transition-all duration-300 ease-in-out">
 				{toastMessage}
 			</div>
 		{/if}
