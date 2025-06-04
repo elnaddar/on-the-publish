@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, createEventDispatcher } from 'svelte';
+	import { onMount, createEventDispatcher, afterUpdate } from 'svelte';
 	import pako from 'pako';
 	import { browser } from '$app/environment'; // Import browser for navigator.onLine check
 
@@ -14,37 +14,27 @@
 	let isShareRtl: boolean = initialRtl;
 	let shareTheme: string = initialTheme;
 
-	// Core link generation
-	let baseGeneratedLink = ''; // The full, un-shortened URL
-	let displayLink = ''; // The URL displayed to the user and copied
+	let baseGeneratedLink = ''; // Always holds the full, unshortened link
+	let displayLink = ''; // The link shown in the input field (can be long or short)
+	let shortenedUrlFromApi = ''; // Stores the successfully shortened URL from Spoo.me
+	
+	let shortenToggleActive = false; // State for the new "Shorten URL" toggle
+	let isShortening = false; // For loading indicator
+	let shortenUrlError = ''; // To display errors
 
-	// Shortening state
-	let shortenUrlActive = false; // True if user wants to shorten the current baseGeneratedLink
-	let shortenedSuccessUrl = ''; // Stores the successfully shortened URL
-	let isShortening = false; // True while API call is in progress
-	let shortenError = ''; // Error message for shortening
-	let hasMounted = false; // To control initial reactive effects
-
-	const SPOO_ME_API_LIMIT = 'Spoo.me API: 5 req/min, 60 req/hr';
-
-	// Function to generate the base (long) shareable link
-	function regenerateBaseLink() {
-		if (!browser) return;
-
-		const previousBaseLinkValue = baseGeneratedLink; // Capture before recalculation
-
-		// Recalculate baseGeneratedLink
-		const dataToShare = {
-			markdown: markdownInput,
-			options: {
-				editable: isEditable,
-				rtl: isShareRtl,
-				theme: shareTheme,
-				readOnly: !isEditable
-			}
-		};
-		let currentCalculatedBaseLink = '';
+	// Function to generate the full shareable link (long version)
+	function generateFullShareLink() {
+		shortenUrlError = ''; // Clear previous errors when options change
 		try {
+			const dataToShare = {
+				markdown: markdownInput,
+				options: {
+					editable: isEditable,
+					rtl: isShareRtl,
+					theme: shareTheme,
+					readOnly: !isEditable
+				}
+			};
 			const jsonString = JSON.stringify(dataToShare);
 			const compressedUint8Array = pako.deflate(jsonString);
 			let binaryString = '';
@@ -53,103 +43,73 @@
 			}
 			const encoded = btoa(binaryString);
 			const baseUrl = window.location.origin + window.location.pathname;
-			currentCalculatedBaseLink = `${baseUrl}#share=${encoded}`;
+			baseGeneratedLink = `${baseUrl}#share=${encoded}`;
 		} catch (e) {
 			console.error('Error generating base share link data:', e);
-			currentCalculatedBaseLink = 'Error generating link data.';
-			// Do not set shortenError here directly, let the logic below handle it if needed
+			baseGeneratedLink = 'Error generating link data.';
+			shortenUrlError = 'Could not generate the base share link data.';
 		}
-
-		if (hasMounted && shortenUrlActive && currentCalculatedBaseLink !== previousBaseLinkValue) {
-			// Options changed while shorten was active and base link actually changed
-			shortenUrlActive = false;
-			shortenedSuccessUrl = '';
-			shortenError = 'Options changed. Re-enable shorten for new link.';
-		} else if (hasMounted && !shortenUrlActive && shortenError === 'Options changed. Re-enable shorten for new link.'){
-			// If toggle is off, and this specific error was showing, clear it as user is changing options further.
-			// Only clear this specific error, not other potential ones like "No internet".
-			shortenError = '';
-		}
-
-		baseGeneratedLink = currentCalculatedBaseLink;
 	}
 
-	// Reactive: Regenerate base link if core options or markdownInput change
-	// This will run when markdownInput, isEditable, isShareRtl, or shareTheme change.
-	$: if (hasMounted) regenerateBaseLink();
-
-	// Reactive: Determine the link to display
-	$: displayLink = shortenUrlActive && shortenedSuccessUrl ? shortenedSuccessUrl : baseGeneratedLink;
-
-
-	async function attemptShortenUrl() {
-		shortenError = ''; // Clear any previous error at the start of a new attempt
-
-		if (!shortenUrlActive || !baseGeneratedLink || baseGeneratedLink.startsWith('Error')) {
-			shortenedSuccessUrl = '';
-			// Avoid setting an error here if shortenUrlActive is false, as it's not an error condition then.
-			if (shortenUrlActive) {
-                shortenError = 'Base link is invalid or not generated.';
-            }
-			return;
-		}
-
-		if (browser && !navigator.onLine) {
-			shortenError = 'No internet connection. Cannot shorten URL.';
-			shortenUrlActive = false; // Turn off switch
-			return;
-		}
-
-		isShortening = true;
-		shortenedSuccessUrl = ''; // Clear previous success
-
-		try {
-			const formData = new URLSearchParams();
-			formData.append('url', baseGeneratedLink);
-
-			const response = await fetch('https://spoo.me/', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/x-www-form-urlencoded',
-					'Accept': 'application/json'
-				},
-				body: formData
-			});
-
-			if (!response.ok) {
-				let errorMsg = `Shorten API error: ${response.status}`;
-				try {
-					const errorData = await response.json();
-					if (errorData && errorData.message) {
-						errorMsg = errorData.message;
-					} else if (response.status === 429) {
-						errorMsg = 'Rate limit exceeded. Please try again later.';
-					}
-				} catch (parseError) { /* ignore */ }
-				throw new Error(errorMsg);
+	async function handleShortenToggle() {
+		if (shortenToggleActive) { // User wants to shorten
+			if (browser && !navigator.onLine) {
+				shortenUrlError = 'No internet connection. Cannot shorten URL.';
+				shortenToggleActive = false; // Revert toggle
+				displayLink = baseGeneratedLink; // Ensure long link is shown
+				return;
 			}
+			
+			isShortening = true;
+			shortenUrlError = '';
+			try {
+				const formData = new URLSearchParams();
+				formData.append('url', baseGeneratedLink); // Shorten the current base link
 
-			const data = await response.json();
-			if (data.short_url) {
-				shortenedSuccessUrl = data.short_url;
-			} else {
-				throw new Error('API did not return a short_url.');
+				const response = await fetch('https://spoo.me/', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+						'Accept': 'application/json'
+					},
+					body: formData
+				});
+
+				if (!response.ok) {
+					let errorMsg = `HTTP error ${response.status}`;
+					try {
+						const errorData = await response.json();
+						if (errorData && errorData.message) {
+							errorMsg = errorData.message;
+						} else if (response.status === 429) {
+							errorMsg = 'Rate limit exceeded (5/min). Please try again later.';
+						}
+					} catch (parseError) { /* Ignore */ }
+					throw new Error(errorMsg);
+				}
+
+				const data = await response.json();
+				if (data.short_url) {
+					shortenedUrlFromApi = data.short_url;
+					displayLink = shortenedUrlFromApi;
+				} else {
+					throw new Error('Failed to retrieve shortened URL from API (invalid response).');
+				}
+			} catch (e: any) {
+				console.error('Error shortening URL with Spoo.me:', e);
+				shortenUrlError = e.message || 'Error shortening URL.';
+				shortenedUrlFromApi = '';
+				displayLink = baseGeneratedLink; // Fallback to long link
+				shortenToggleActive = false; // Revert toggle on error
+			} finally {
+				isShortening = false;
 			}
-		} catch (e: any) {
-			console.error('Error shortening URL with Spoo.me:', e);
-			shortenError = e.message || 'Error shortening URL.';
-			shortenUrlActive = false; // Turn off switch on error
-			shortenedSuccessUrl = '';
-		} finally {
-			isShortening = false;
+		} else { // User wants to revert to long link or toggle was turned off
+			displayLink = baseGeneratedLink;
+			shortenedUrlFromApi = ''; // Clear any previously shortened link
+			// shortenUrlError = ''; // Don't clear error if it was due to a failed shorten attempt that auto-toggled off
 		}
 	}
-
-	// When the shortenUrlActive toggle changes to true by user, attempt to shorten
-	$: if (hasMounted && shortenUrlActive && !isShortening && !shortenedSuccessUrl && baseGeneratedLink && !baseGeneratedLink.startsWith('Error')) {
-		attemptShortenUrl();
-	}
-
 
 	function copyLink() {
 		if (browser && navigator.clipboard && displayLink && !displayLink.startsWith('Error')) {
@@ -164,13 +124,61 @@
 				});
 		}
 	}
-
+	
+	// Initial generation and when fundamental inputs change
 	onMount(() => {
 		if (browser) {
-			regenerateBaseLink(); // Generate base link initially
-			hasMounted = true; // Set after first regeneration
+			generateFullShareLink();
+			displayLink = baseGeneratedLink; // Initialize displayLink
 		}
 	});
+
+	// $: console.log({ markdownInput, isEditable, isShareRtl, shareTheme});
+
+	// Reactive statement for option changes
+	$: if (browser && (markdownInput, isEditable, isShareRtl, shareTheme)) {
+		// This block runs when any of these dependencies change.
+		// It needs to be careful not to run unnecessarily on initial mount if onMount already handles it.
+		// Svelte's reactivity might trigger this multiple times initially if props are passed.
+		// Using afterUpdate can sometimes help, or ensuring onMount handles the very first setup.
+		
+		// Generate the full link whenever options change
+		generateFullShareLink();
+		
+		// If the toggle was active, and options changed, reset it and show the new long link.
+		if (shortenToggleActive) {
+			shortenToggleActive = false; // Turn off the toggle
+			// The handleShortenToggle will be called due to bind:checked,
+			// or we can directly set displayLink here.
+			// Setting shortenToggleActive to false will trigger its bound logic IF using bind:checked.
+			// If not, we must manually update displayLink.
+		}
+		// Always ensure displayLink reflects the latest baseGeneratedLink after options change,
+		// unless a successful shorten operation is active (which is handled by shortenToggleActive being false now)
+		if (!shortenToggleActive) {
+			displayLink = baseGeneratedLink;
+		}
+		shortenedUrlFromApi = ''; // Clear any old shortened URL
+		// Do not clear shortenUrlError here as it might be relevant from a previous failed attempt.
+		// generateFullShareLink() already clears it if a new link is successfully made.
+	}
+
+	// This reactive statement handles the consequence of `shortenToggleActive` changing,
+	// typically due to user interaction with the toggle switch.
+	$: if (browser && shortenToggleActive !== undefined) { // Check !== undefined to avoid running on init before bind:checked
+		// We need to ensure this doesn't fight with the option change logic.
+		// The primary action of shortening or reverting to long URL is now in handleShortenToggle,
+		// which is called when the user clicks the switch.
+		// If options change, the above block sets shortenToggleActive = false,
+		// then this block might run.
+		// If shortenToggleActive is false here, we ensure displayLink is baseGeneratedLink.
+		if (!shortenToggleActive) {
+			displayLink = baseGeneratedLink;
+			shortenedUrlFromApi = ''; // Clear any previously shortened link
+		}
+		// If shortenToggleActive is true, the user *just* clicked it.
+		// handleShortenToggle will be invoked by the click event on the switch.
+	}
 
 </script>
 
@@ -241,45 +249,59 @@
 				id="generatedLinkTextarea"
 				readonly
 				bind:value={displayLink}
-				class="h-24 w-full resize-none rounded-md border border-gray-300 bg-gray-50 p-2 font-mono text-xs {shortenError && !shortenUrlActive ? 'border-red-500' : ''}"
+				class="h-24 w-full resize-none rounded-md border border-gray-300 bg-gray-50 p-2 font-mono text-xs {shortenUrlError ? 'border-red-500' : ''}"
 				aria-label="Generated Shareable Link"
-				placeholder={isShortening ? 'Generating link...' : (baseGeneratedLink || 'Link will appear here...') }
+				placeholder={isShortening ? 'Generating link...' : (baseGeneratedLink || 'Link will appear here...')}
 			></textarea>
+			{#if shortenUrlError}
+				<p class="mt-1 text-sm text-red-600">{shortenUrlError}</p>
+			{/if}
 		</div>
 		
-		<div class="mb-4 space-y-2">
-			<label class="flex cursor-pointer items-center">
-				<div class="relative">
-				  <input type="checkbox" class="sr-only" bind:checked={shortenUrlActive} disabled={isShortening || !baseGeneratedLink || baseGeneratedLink.startsWith('Error')}/>
-				  <div class="block h-6 w-10 rounded-full bg-gray-300 transition"></div>
-				  <div class="dot absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition"></div>
-				</div>
-				<div class="ml-3 text-sm text-gray-700">
-					Shorten URL 
-					<span class="text-xs text-gray-500">({SPOO_ME_API_LIMIT})</span>
-				</div>
-			</label>
-			{#if isShortening}
-				<p class="text-sm text-blue-600">Shortening URL...</p>
-			{/if}
-			{#if shortenError}
-				<p class="text-sm text-red-600">{shortenError}</p>
-			{/if}
+		<div class="mb-4 flex items-center justify-between">
+			<div class="flex items-center space-x-2">
+				<label
+					for="shortenUrlToggle"
+					class="flex cursor-pointer items-center text-sm font-medium text-gray-700"
+				>
+					<span class="mr-2">Shorten URL</span>
+					<input
+						type="checkbox"
+						id="shortenUrlToggle"
+						bind:checked={shortenToggleActive}
+						on:change={handleShortenToggle} 
+						disabled={isShortening || !baseGeneratedLink || baseGeneratedLink.startsWith('Error')}
+						class="form-switch sr-only"
+					/>
+					<div class="relative">
+						<div class="block h-6 w-10 rounded-full bg-gray-300 transition"></div>
+						<div
+							class="dot absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition {shortenToggleActive ? 'translate-x-full !bg-blue-600' : ''}"
+						></div>
+					</div>
+				</label>
+				{#if isShortening}
+					<p class="text-sm text-blue-600">Working...</p>
+				{/if}
+			</div>
+			<p class="text-xs text-gray-500">API Limit: 5/min (Spoo.me)</p>
 		</div>
 
-		<div class="flex items-center justify-end space-x-3 border-t pt-4 mt-4">
+
+		<div class="flex items-center justify-end space-x-3 border-t pt-4">
 			<button
 				on:click={() => dispatch('close')}
-				class="rounded bg-gray-200 px-4 py-2 text-gray-800 hover:bg-gray-300"
+				class="rounded bg-gray-200 px-4 py-2 text-sm text-gray-800 hover:bg-gray-300"
 			>
 				Close
 			</button>
 			<button
 				on:click={copyLink}
-				class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-				disabled={!displayLink || displayLink.startsWith('Error') || isShortening || (shortenUrlActive && !shortenedSuccessUrl)}
+				class="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+				disabled={!displayLink || displayLink.startsWith('Error') || isShortening}
 			>
-				{#if isShortening && shortenUrlActive}
+				{#if isShortening && shortenToggleActive} 
+					<!-- Show spinner only if shortening is active for THIS toggle press -->
 					<svg class="mr-2 inline h-4 w-4 animate-spin text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
 						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -294,38 +316,12 @@
 </div>
 
 <style>
-	/* Basic toggle switch styling */
-	input[type="checkbox"].sr-only:checked + div {
-		background-color: #4f46e5; /* Tailwind indigo-600 */
+	.form-switch:checked + .relative .block {
+		background-color: #2563eb; /* blue-600 */
 	}
-	input[type="checkbox"].sr-only:checked + div + div.dot {
+	.form-switch:checked + .relative .dot {
 		transform: translateX(100%);
 		background-color: white;
 	}
-	div.dot {
-		/* Adjust based on block size if needed */
-		width: 1rem; /* h-4 */
-		height: 1rem; /* w-4 */
-		top: 0.125rem; /* top-0.5 approx */
-		left: 0.125rem; /* left-0.5 approx */
-	}
-	div.block {
-		width: 2.5rem; /* w-10 */
-		height: 1.5rem; /* h-6 */
-	}
-
-	/* Disabled state for toggle */
-	input[type="checkbox"].sr-only:disabled + div {
-		background-color: #d1d5db; /* Tailwind gray-300 */
-		cursor: not-allowed;
-	}
-	input[type="checkbox"].sr-only:disabled + div + div.dot {
-		background-color: #9ca3af; /* Tailwind gray-400 */
-	}
-	label.flex.cursor-pointer.items-center input[type="checkbox"].sr-only:disabled ~ .ml-3 {
-		color: #9ca3af; /* Tailwind gray-400 */
-		cursor: not-allowed;
-	}
-
 </style>
  
