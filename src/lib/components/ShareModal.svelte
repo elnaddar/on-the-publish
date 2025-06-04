@@ -12,13 +12,12 @@
 	let isEditable = false;
 	let isShareRtl: boolean = initialRtl;
 	let shareTheme: string = initialTheme;
-	let generatedLink = '';
-	let isShortenUrlEnabled = false;
+	
+	let generatedLink = ''; // The full, unshortened link
+	let actualLinkToDisplay = ''; // What's shown in the textarea and copied
 	let isShortening = false;
-	let actualLinkToDisplay = ''; // Will hold either generatedLink or shortenedLink
 	let toastMessage = '';
 	let toastTimeout: number | undefined = undefined;
-	let showApiLimitsInfo = false;
 
 	function showToast(message: string, duration: number = 3000) {
 		toastMessage = message;
@@ -32,96 +31,78 @@
 		return navigator.onLine;
 	}
 
-	function generateLink() {
+	// Generates the long, encoded link based on current options
+	function generateBaseLink() {
 		const dataToShare = {
 			markdown: markdownInput,
 			options: {
 				editable: isEditable,
 				rtl: isShareRtl,
 				theme: shareTheme,
-				readOnly: !isEditable // Explicitly set readOnly based on isEditable
+				readOnly: !isEditable
 			}
 		};
-
 		try {
 			const jsonString = JSON.stringify(dataToShare);
-			const compressedUint8Array = pako.deflate(jsonString); // Returns Uint8Array
+			const compressedUint8Array = pako.deflate(jsonString);
 			let binaryString = '';
 			for (let i = 0; i < compressedUint8Array.length; i++) {
 				binaryString += String.fromCharCode(compressedUint8Array[i]);
 			}
 			const encoded = btoa(binaryString);
-
-			// Construct the URL. We will need a separate route/page to handle these links later.
-			// For now, let's assume a '/s/:data' structure or query param.
-			// Using a fragment identifier (#) is simpler for client-side only handling.
 			const baseUrl = window.location.origin + window.location.pathname;
 			generatedLink = `${baseUrl}#share=${encoded}`;
 		} catch (e) {
 			console.error('Error generating share link:', e);
 			generatedLink = 'Error generating link.';
 		}
+		actualLinkToDisplay = generatedLink; // Always update display with the new base link
 	}
 
-	async function generateLinkAndUpdateDisplay() {
-		generateLink(); // Step 1: Always ensure the base `generatedLink` is current.
+	async function handleShortenUrlClick() {
+		if (generatedLink.startsWith('Error')) {
+			showToast('Cannot shorten: Base link has an error.', 3000);
+			return;
+		}
+		if (actualLinkToDisplay.includes('spoo.me/')) {
+			showToast('Link is already shortened.', 3000);
+			return;
+		}
+		if (!checkInternetConnection()) {
+			showToast('No internet connection. Cannot shorten URL.', 3000);
+			return;
+		}
 
-		if (isShortenUrlEnabled) {
-			// Step 2: Attempt to shorten if the switch is ON.
-			if (generatedLink.startsWith('Error')) {
-				// This case should have been caught by the reactive logic already, turning switch off.
-				// If somehow reached here, ensure UI consistency.
-				actualLinkToDisplay = generatedLink;
-				isShortenUrlEnabled = false; // Corrects the switch state.
-				return;
-			}
-			if (!checkInternetConnection()) {
-				showToast('No internet connection. Cannot shorten URL.');
-				isShortenUrlEnabled = false; // Turn off switch
-				actualLinkToDisplay = generatedLink;
-				return;
-			}
+		isShortening = true;
+		try {
+			const response = await fetch("https://spoo.me/", {
+				method: "POST",
+				headers: {
+					"Accept": "application/json",
+					"Content-Type": "application/x-www-form-urlencoded",
+				},
+				body: new URLSearchParams({ url: generatedLink }), // Shorten the master generatedLink
+			});
 
-			isShortening = true;
-			// API limits text visibility is handled by the template based on `isShortenUrlEnabled`.
-			try {
-				const response = await fetch("https://spoo.me/", {
-					method: "POST",
-					headers: {
-						"Accept": "application/json",
-						"Content-Type": "application/x-www-form-urlencoded",
-					},
-					body: new URLSearchParams({ url: generatedLink }),
-				});
-
-				if (response.ok) {
-					const data = await response.json();
-					actualLinkToDisplay = data.short_url;
-					showToast("URL shortened successfully!");
-					// isShortenUrlEnabled remains true, API limits text remains visible.
-				} else if (response.status === 429) {
-					showToast("Spoo.me API rate limit reached. Using original URL.", 5000);
-					isShortenUrlEnabled = false; // Turn off switch, API limits text will hide.
-					actualLinkToDisplay = generatedLink;
-				} else {
-					const errorText = await response.text();
-					showToast(`Failed to shorten URL (Error ${response.status}). Using original URL.`, 5000);
-					console.error("Spoo.me API error:", errorText);
-					isShortenUrlEnabled = false; // Turn off switch, API limits text will hide.
-					actualLinkToDisplay = generatedLink;
-				}
-			} catch (error) {
-				showToast("Error connecting to URL shortener. Using original URL.", 5000);
-				console.error("Network or other error:", error);
-				isShortenUrlEnabled = false; // Turn off switch, API limits text will hide.
-				actualLinkToDisplay = generatedLink;
-			} finally {
-				isShortening = false;
+			if (response.ok) {
+				const data = await response.json();
+				actualLinkToDisplay = data.short_url;
+				showToast("URL shortened successfully!");
+			} else if (response.status === 429) {
+				showToast("Spoo.me API rate limit reached. Please try again later.", 5000);
+				// actualLinkToDisplay remains generatedLink (the long one)
+			} else {
+				const errorText = await response.text();
+				showToast(`Failed to shorten URL (Error ${response.status}).`, 5000);
+				console.error("Spoo.me API error:", errorText);
+				// actualLinkToDisplay remains generatedLink
 			}
-		} else {
-			// Step 3: If switch is OFF, just ensure long link is displayed.
-			actualLinkToDisplay = generatedLink;
-			// API limits text will be hidden by template condition.
+		} catch (error) {
+			showToast("Error connecting to URL shortener.", 5000);
+			console.error("Network or other error:", error);
+			// actualLinkToDisplay remains generatedLink
+		} finally {
+			isShortening = false;
 		}
 	}
 
@@ -138,48 +119,14 @@
 	}
 
 	onMount(() => {
-		generateLinkAndUpdateDisplay(); // Generate link initially
+		generateBaseLink(); // Generate and display the initial long link
 	});
 
-	// Regenerate link when options change
+	// Regenerate base link and reset display when options change
 	$: if (markdownInput || isEditable || isShareRtl || shareTheme) {
-		const wasShorteningPreviouslyEnabled = isShortenUrlEnabled;
-		if (isShortenUrlEnabled) {
-			isShortenUrlEnabled = false; // Resets the switch, will trigger 'else' block of reactive logic
-		}
-		generateLinkAndUpdateDisplay(); // Regenerate base link, actualLinkToDisplay will be updated.
-									// If wasShorteningPreviouslyEnabled was true, the user gets a toast from the reactive 'else' block.
+		generateBaseLink();
 	}
 
-	// Handle manual toggling of the shorten switch and its effects
-	$: if (isShortenUrlEnabled) {
-		// Switch is turned ON
-		if (generatedLink.startsWith('Error')) {
-			showToast('Cannot shorten: Base link has an error.', 3000);
-			isShortenUrlEnabled = false; // Immediately turn it back off
-		} else if (!isShortening) {
-			// If not already busy and base link is okay, proceed to shorten.
-			generateLinkAndUpdateDisplay();
-		}
-		// If isShortening is true, an operation is already in progress. No action here.
-		// showApiLimitsInfo is effectively controlled by the template based on isShortenUrlEnabled.
-
-	} else {
-		// Switch is turned OFF (either by user or programmatically)
-		if (!isShortening) { // Only act if not in the middle of an operation
-			const currentlyShowingShortened = actualLinkToDisplay !== generatedLink && !generatedLink.startsWith('Error');
-			if (currentlyShowingShortened) {
-				actualLinkToDisplay = generatedLink;
-				showToast('URL shortening disabled.', 2000);
-			} else if (actualLinkToDisplay !== generatedLink && generatedLink.startsWith('Error')) {
-				// Ensure error message is shown if that's the base link
-				actualLinkToDisplay = generatedLink;
-			} else if (actualLinkToDisplay === generatedLink) {
-				// Already showing long link, no toast needed unless it was just programmatically turned off
-			}
-			// showApiLimitsInfo is handled by the template based on isShortenUrlEnabled being false.
-		}
-	}
 </script>
 
 <div
@@ -236,34 +183,9 @@
 					{/each}
 				</select>
 			</div>
-
-			<!-- Shorten URL Switch -->
-			<div class="pt-4">
-				<label class="flex items-center cursor-pointer select-none" for="shortenUrlToggle">
-					<div class="relative">
-						<input
-							id="shortenUrlToggle"
-							type="checkbox"
-							bind:checked={isShortenUrlEnabled}
-							class="sr-only peer"
-							disabled={isShortening} 
-						/>
-						<div class="block h-7 w-12 rounded-full bg-gray-300 peer-checked:bg-blue-500 transition"></div>
-						<div class="dot absolute left-1 top-1 h-5 w-5 rounded-full bg-white transition-transform duration-200 ease-in-out peer-checked:translate-x-full"></div>
-					</div>
-					<span class="ml-3 text-sm text-gray-700">
-						Shorten generated URL {isShortening ? '(Working...)' : ''}
-					</span>
-				</label>
-				{#if isShortenUrlEnabled && !generatedLink.startsWith('Error')}
-					<p class="ml-[3.25rem] text-xs text-gray-500 mt-1">
-						Using spoo.me (Limits: 5/min, 50/hour, 500/day).
-					</p>
-				{/if}
-			</div>
 		</div>
 
-		<div class="mb-4">
+		<div class="mb-2">
 			<label for="generatedLinkTextarea" class="mb-1 block text-sm font-medium text-gray-700"
 				>Shareable Link:</label
 			>
@@ -276,6 +198,13 @@
 			></textarea>
 		</div>
 
+		<!-- API Limits Info -->
+		{#if actualLinkToDisplay.includes('spoo.me/')}
+			<p class="mb-3 text-xs text-gray-500">
+				Shortened with spoo.me (Limits: 5/min, 50/hour, 500/day).
+			</p>
+		{/if}
+
 		<!-- Toast Message Area -->
 		{#if toastMessage}
 			<div class="mb-4 rounded-md bg-slate-700 p-3 text-center text-sm text-white shadow-lg transition-all duration-300 ease-in-out">
@@ -283,19 +212,34 @@
 			</div>
 		{/if}
 
-		<div class="flex justify-end space-x-3">
+		<div class="flex items-center justify-end space-x-3">
 			<button
-				on:click={() => dispatch('close')}
-				class="rounded bg-gray-200 px-4 py-2 text-gray-800 hover:bg-gray-300"
+				on:click={handleShortenUrlClick}
+				class="rounded bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+				disabled={isShortening || generatedLink.startsWith('Error') || actualLinkToDisplay.includes('spoo.me/')}
 			>
-				Close
+				{#if isShortening}
+					<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					  </svg>
+					Shortening...
+				{:else}
+					Shorten URL
+				{/if}
 			</button>
 			<button
 				on:click={copyLink}
-				class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+				class="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
 				disabled={!actualLinkToDisplay || actualLinkToDisplay.startsWith('Error') || isShortening}
 			>
 				Copy Link
+			</button>
+			<button
+				on:click={() => dispatch('close')}
+				class="rounded bg-gray-200 px-4 py-2 text-sm text-gray-800 hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2"
+			>
+				Close
 			</button>
 		</div>
 	</div>
