@@ -132,30 +132,51 @@
 
 	// Regenerate link when options change
 	$: if (markdownInput || isEditable || isShareRtl || shareTheme) {
+		// If any of the core options change, we must regenerate the base link.
+		// If shortening was enabled, we'll disable it to force the user to re-opt-in for the new URL.
+		const wasShorteningEnabled = isShortenUrlEnabled;
 		if (isShortenUrlEnabled) {
-			// If shorten was on, changing options should reset it
-			isShortenUrlEnabled = false;
-			showApiLimitsInfo = false;
+			isShortenUrlEnabled = false; // This will trigger the reactive block below to reset display and hide API limits.
 		}
-		generateLinkAndUpdateDisplay();
+		generateLinkAndUpdateDisplay(); // This will now generate the new long link and update the display.
+		// Since isShortenUrlEnabled is false, no shortening attempt will be made here.
+		if (wasShorteningEnabled) {
+			// Optionally, inform the user that shortening was disabled.
+			// The reactive block for isShortenUrlEnabled=false will show "URL shortening disabled."
+		}
 	}
 
-	$: if (
-		isShortenUrlEnabled &&
-		!isShortening &&
-		actualLinkToDisplay !== generatedLink &&
-		!generatedLink.startsWith('Error')
-	) {
-		// If toggled ON, and we don't already have a short link for the current generatedLink
-		generateLinkAndUpdateDisplay();
-	} else if (!isShortenUrlEnabled && !isShortening) {
-		// If toggled OFF
-		if (actualLinkToDisplay !== generatedLink) {
-			// only update if we were showing a short link
-			actualLinkToDisplay = generatedLink;
-			showToast('URL shortening disabled.', 2000);
+	// Handle manual toggling of the shorten checkbox and its effects
+	$: if (isShortenUrlEnabled) {
+		// Checkbox is checked or programmatically set to true
+		if (!isShortening && !generatedLink.startsWith('Error')) {
+			// If not already in the process of shortening and the base link is valid,
+			// attempt to shorten. generateLinkAndUpdateDisplay will handle API call & UI updates.
+			generateLinkAndUpdateDisplay();
+		} else if (generatedLink.startsWith('Error')) {
+			// If the base link itself has an error, we can't shorten.
+			// Force uncheck the checkbox and notify the user.
+			isShortenUrlEnabled = false; // This will trigger the 'else' block below.
+			showToast('Cannot shorten: Fix error in generating base link first.', 3000);
 		}
-		showApiLimitsInfo = false;
+		// If 'isShortening' is true, it means an operation is in progress.
+		// generateLinkAndUpdateDisplay() is already running and will update UI upon completion/failure.
+		// No further action needed in this reactive step for that case.
+	} else {
+		// Checkbox is unchecked or programmatically set to false
+		if (!isShortening) {
+			// Only proceed if not in the middle of a shortening attempt
+			if (actualLinkToDisplay !== generatedLink && !generatedLink.startsWith('Error')) {
+				// If we were displaying a shortened URL, and the base link is fine, revert to the long link.
+				actualLinkToDisplay = generatedLink;
+				showToast('URL shortening disabled.', 2000);
+			} else if (generatedLink.startsWith('Error') && actualLinkToDisplay !== generatedLink) {
+				// If the base link is an error, ensure we are displaying that error.
+				actualLinkToDisplay = generatedLink;
+			}
+			// When shortening is disabled, API limits info should not be shown based on this explicit state.
+			showApiLimitsInfo = false;
+		}
 	}
 </script>
 
