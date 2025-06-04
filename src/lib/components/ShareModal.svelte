@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, createEventDispatcher, tick } from 'svelte';
+	import { onMount, createEventDispatcher } from 'svelte';
 	import pako from 'pako';
 	import { browser } from '$app/environment'; // Import browser for navigator.onLine check
 
@@ -23,12 +23,17 @@
 	let shortenedSuccessUrl = ''; // Stores the successfully shortened URL
 	let isShortening = false; // True while API call is in progress
 	let shortenError = ''; // Error message for shortening
+	let hasMounted = false; // To control initial reactive effects
 
 	const SPOO_ME_API_LIMIT = 'Spoo.me API: 5 req/min, 60 req/hr';
 
 	// Function to generate the base (long) shareable link
 	function regenerateBaseLink() {
 		if (!browser) return;
+
+		const previousBaseLinkValue = baseGeneratedLink; // Capture before recalculation
+
+		// Recalculate baseGeneratedLink
 		const dataToShare = {
 			markdown: markdownInput,
 			options: {
@@ -38,6 +43,7 @@
 				readOnly: !isEditable
 			}
 		};
+		let currentCalculatedBaseLink = '';
 		try {
 			const jsonString = JSON.stringify(dataToShare);
 			const compressedUint8Array = pako.deflate(jsonString);
@@ -47,34 +53,44 @@
 			}
 			const encoded = btoa(binaryString);
 			const baseUrl = window.location.origin + window.location.pathname;
-			baseGeneratedLink = `${baseUrl}#share=${encoded}`;
+			currentCalculatedBaseLink = `${baseUrl}#share=${encoded}`;
 		} catch (e) {
 			console.error('Error generating base share link data:', e);
-			baseGeneratedLink = 'Error generating link data.';
-			shortenError = 'Could not generate the base share link data.'; // Show error
+			currentCalculatedBaseLink = 'Error generating link data.';
+			// Do not set shortenError here directly, let the logic below handle it if needed
 		}
-	}
 
-	// Reactive: Regenerate base link if core options change
-	$: if (browser) regenerateBaseLink();
-
-	// Reactive: If base link changes while shorten was active, deactivate shorten
-	$: if (baseGeneratedLink && browser) {
-		if (shortenUrlActive) {
-			shortenUrlActive = false; // User needs to re-enable for the new link
+		if (hasMounted && shortenUrlActive && currentCalculatedBaseLink !== previousBaseLinkValue) {
+			// Options changed while shorten was active and base link actually changed
+			shortenUrlActive = false;
 			shortenedSuccessUrl = '';
 			shortenError = 'Options changed. Re-enable shorten for new link.';
+		} else if (hasMounted && !shortenUrlActive && shortenError === 'Options changed. Re-enable shorten for new link.'){
+			// If toggle is off, and this specific error was showing, clear it as user is changing options further.
+			// Only clear this specific error, not other potential ones like "No internet".
+			shortenError = '';
 		}
+
+		baseGeneratedLink = currentCalculatedBaseLink;
 	}
+
+	// Reactive: Regenerate base link if core options or markdownInput change
+	// This will run when markdownInput, isEditable, isShareRtl, or shareTheme change.
+	$: if (hasMounted) regenerateBaseLink();
 
 	// Reactive: Determine the link to display
 	$: displayLink = shortenUrlActive && shortenedSuccessUrl ? shortenedSuccessUrl : baseGeneratedLink;
 
 
 	async function attemptShortenUrl() {
+		shortenError = ''; // Clear any previous error at the start of a new attempt
+
 		if (!shortenUrlActive || !baseGeneratedLink || baseGeneratedLink.startsWith('Error')) {
 			shortenedSuccessUrl = '';
-			shortenError = shortenUrlActive ? 'Base link is invalid or not generated.' : '';
+			// Avoid setting an error here if shortenUrlActive is false, as it's not an error condition then.
+			if (shortenUrlActive) {
+                shortenError = 'Base link is invalid or not generated.';
+            }
 			return;
 		}
 
@@ -85,8 +101,7 @@
 		}
 
 		isShortening = true;
-		shortenError = '';
-		shortenedSuccessUrl = '';
+		shortenedSuccessUrl = ''; // Clear previous success
 
 		try {
 			const formData = new URLSearchParams();
@@ -108,7 +123,7 @@
 					if (errorData && errorData.message) {
 						errorMsg = errorData.message;
 					} else if (response.status === 429) {
-						errorMsg = 'Rate limit exceeded for URL shortener. Please try again later.';
+						errorMsg = 'Rate limit exceeded. Please try again later.';
 					}
 				} catch (parseError) { /* ignore */ }
 				throw new Error(errorMsg);
@@ -118,7 +133,7 @@
 			if (data.short_url) {
 				shortenedSuccessUrl = data.short_url;
 			} else {
-				throw new Error('Failed to retrieve shortened URL from API (invalid response).');
+				throw new Error('API did not return a short_url.');
 			}
 		} catch (e: any) {
 			console.error('Error shortening URL with Spoo.me:', e);
@@ -130,8 +145,8 @@
 		}
 	}
 
-	// When the shortenUrlActive toggle changes to true, attempt to shorten
-	$: if (shortenUrlActive && browser && !isShortening && !shortenedSuccessUrl && baseGeneratedLink && !baseGeneratedLink.startsWith('Error')) {
+	// When the shortenUrlActive toggle changes to true by user, attempt to shorten
+	$: if (hasMounted && shortenUrlActive && !isShortening && !shortenedSuccessUrl && baseGeneratedLink && !baseGeneratedLink.startsWith('Error')) {
 		attemptShortenUrl();
 	}
 
@@ -153,6 +168,7 @@
 	onMount(() => {
 		if (browser) {
 			regenerateBaseLink(); // Generate base link initially
+			hasMounted = true; // Set after first regeneration
 		}
 	});
 
