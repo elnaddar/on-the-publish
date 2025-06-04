@@ -120,7 +120,7 @@
       .use(rehypeStringify);
 
     let editorHostEl: HTMLDivElement;
-    let cmView: EditorView;
+    let cmView: EditorView | undefined = undefined;
     let previewEl: HTMLDivElement;
     let isEditorScrolling = false;
     let isPreviewScrolling = false;
@@ -141,6 +141,9 @@
     let allowSessionSaving = false; // Gate for allowing session saves - DEFAULT FALSE
     let showExamplesDropdown = false;
     let primeForSavingOnNextEditAfterShareLoad = false; // True if shared content just loaded, waiting for first edit
+
+    let isHeaderControlsVisible = false;
+    let isSmallScreen = false;
 
     let readOnlyCompartment = new Compartment();
     let directionCompartment = new Compartment();
@@ -411,6 +414,21 @@
     onMount(() => {
       let hashChangeHandlerInstance: () => Promise<void>;
 
+      const mediaQuery = window.matchMedia("(max-width: 767px)");
+      const updateScreenSize = () => {
+        isSmallScreen = mediaQuery.matches;
+        // Align initial vertical split with small screen status if needed, or keep separate
+        // For now, the existing onMount logic for isVerticalSplit is fine as it runs once.
+      };
+
+      updateScreenSize(); // Set initial state
+      mediaQuery.addEventListener('change', updateScreenSize);
+
+      // Determine initial split based on screen size
+      if (typeof window !== 'undefined') {
+        isVerticalSplit = window.innerWidth < 768; // This can also use isSmallScreen if preferred after first mount
+      }
+
       const init = async () => {
         isLoading = true;
         await tick();
@@ -544,6 +562,7 @@
         if (themeLink) themeLink.remove();
         if (hashChangeHandlerInstance) window.removeEventListener('hashchange', hashChangeHandlerInstance);
         document.removeEventListener('click', handleClickOutside, true);
+        mediaQuery.removeEventListener('change', updateScreenSize); // Clean up media query listener
       };
     });
   
@@ -845,9 +864,31 @@
 {:else}
   <div class="flex h-screen flex-col" dir={isRtl ? 'rtl' : 'ltr'} style="font-family: {isRtl ? 'Noto Sans Arabic' : 'Inter'}, sans-serif;">
     {#if !isReadOnly}
-      <header class="flex items-center justify-between bg-gray-800 p-4 text-white shadow-md">
-        <h1 class="text-2xl font-semibold">Markdown Editor</h1>
-        <div class="flex items-center space-x-3">
+      <header class="bg-gray-800 p-4 text-white shadow-md flex flex-col md:flex-row md:items-center md:justify-between gap-y-3">
+        <div class="flex items-center justify-between"> 
+          <h1 class="text-2xl font-semibold">Markdown Editor</h1>
+          <button 
+            class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 md:hidden"
+            on:click={() => isHeaderControlsVisible = !isHeaderControlsVisible}
+            aria-label="Toggle menu"
+            aria-expanded={isHeaderControlsVisible}
+          >
+            {#if isHeaderControlsVisible}
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-6 w-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            {:else}
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-6 w-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+              </svg>
+            {/if}
+          </button>
+        </div>
+
+        <div 
+          class="flex items-center flex-wrap gap-x-3 gap-y-2 md:flex" 
+          class:hidden="{!isHeaderControlsVisible && isSmallScreen}"
+        >
           <button title="Toggle Text Direction" on:click={toggleRtl} class="rounded p-2 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">
             {isRtl ? 'LTR' : 'RTL'}
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="ml-1 inline-block h-5 w-5 align-middle">
