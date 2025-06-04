@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, createEventDispatcher } from 'svelte';
+	import { onMount, createEventDispatcher, tick } from 'svelte';
 	import pako from 'pako';
 	import { browser } from '$app/environment'; // Import browser for navigator.onLine check
 
@@ -13,17 +13,22 @@
 	let isEditable = false;
 	let isShareRtl: boolean = initialRtl;
 	let shareTheme: string = initialTheme;
-	let generatedLink = '';
-	let shouldShortenUrl = false; // New state for the checkbox
-	let shortenUrlError = ''; // To display errors like "No internet"
-	let isShortening = false; // For loading indicator
-	let currentLongLink = ''; // Store the current long link to avoid re-shortening unnecessarily
 
-	async function generateAndMaybeShortenLink() {
-		shortenUrlError = '';
-		isShortening = false;
+	// Core link generation
+	let baseGeneratedLink = ''; // The full, un-shortened URL
+	let displayLink = ''; // The URL displayed to the user and copied
 
-		// First, generate the long link (data part)
+	// Shortening state
+	let shortenUrlActive = false; // True if user wants to shorten the current baseGeneratedLink
+	let shortenedSuccessUrl = ''; // Stores the successfully shortened URL
+	let isShortening = false; // True while API call is in progress
+	let shortenError = ''; // Error message for shortening
+
+	const SPOO_ME_API_LIMIT = 'Spoo.me API: 5 req/min, 60 req/hr';
+
+	// Function to generate the base (long) shareable link
+	function regenerateBaseLink() {
+		if (!browser) return;
 		const dataToShare = {
 			markdown: markdownInput,
 			options: {
@@ -33,8 +38,6 @@
 				readOnly: !isEditable
 			}
 		};
-
-		let newLongLink = '';
 		try {
 			const jsonString = JSON.stringify(dataToShare);
 			const compressedUint8Array = pako.deflate(jsonString);
@@ -44,76 +47,99 @@
 			}
 			const encoded = btoa(binaryString);
 			const baseUrl = window.location.origin + window.location.pathname;
-			newLongLink = `${baseUrl}#share=${encoded}`;
+			baseGeneratedLink = `${baseUrl}#share=${encoded}`;
 		} catch (e) {
 			console.error('Error generating base share link data:', e);
-			generatedLink = 'Error generating link.';
-			shortenUrlError = 'Could not generate the base share link.';
-			currentLongLink = '';
-			return;
-		}
-
-		currentLongLink = newLongLink; // Store the new long link
-
-		if (shouldShortenUrl) {
-			if (browser && !navigator.onLine) {
-				shortenUrlError = 'No internet connection. Cannot shorten URL.';
-				generatedLink = currentLongLink; // Fallback to long link
-				return;
-			}
-			isShortening = true;
-			try {
-				const formData = new URLSearchParams();
-				formData.append('url', currentLongLink);
-
-				const response = await fetch('https://spoo.me/', { // Using Spoo.me API
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/x-www-form-urlencoded',
-						'Accept': 'application/json'
-					},
-					body: formData
-				});
-
-				if (!response.ok) {
-					// Try to parse error from Spoo.me if possible, otherwise generic message
-					let errorMsg = `HTTP error ${response.status}`;
-					try {
-						const errorData = await response.json();
-						if (errorData && errorData.message) {
-							errorMsg = errorData.message;
-						} else if (response.status === 429) {
-							errorMsg = 'Rate limit exceeded for URL shortener. Please try again later.';
-						}
-					} catch (parseError) {
-						// Ignore if error response is not JSON
-					}
-					throw new Error(errorMsg);
-				}
-
-				const data = await response.json();
-				if (data.short_url) {
-					generatedLink = data.short_url;
-				} else {
-					generatedLink = currentLongLink; // Fallback if API response is not as expected
-					shortenUrlError = 'Failed to retrieve shortened URL from API (invalid response).';
-				}
-			} catch (e: any) {
-				console.error('Error shortening URL with Spoo.me:', e);
-				shortenUrlError = e.message || 'Error shortening URL.';
-				generatedLink = currentLongLink; // Fallback to long link on error
-			} finally {
-				isShortening = false;
-			}
-		} else {
-			generatedLink = currentLongLink;
+			baseGeneratedLink = 'Error generating link data.';
+			shortenError = 'Could not generate the base share link data.'; // Show error
 		}
 	}
 
+	// Reactive: Regenerate base link if core options change
+	$: if (browser) regenerateBaseLink();
+
+	// Reactive: If base link changes while shorten was active, deactivate shorten
+	$: if (baseGeneratedLink && browser) {
+		if (shortenUrlActive) {
+			shortenUrlActive = false; // User needs to re-enable for the new link
+			shortenedSuccessUrl = '';
+			shortenError = 'Options changed. Re-enable shorten for new link.';
+		}
+	}
+
+	// Reactive: Determine the link to display
+	$: displayLink = shortenUrlActive && shortenedSuccessUrl ? shortenedSuccessUrl : baseGeneratedLink;
+
+
+	async function attemptShortenUrl() {
+		if (!shortenUrlActive || !baseGeneratedLink || baseGeneratedLink.startsWith('Error')) {
+			shortenedSuccessUrl = '';
+			shortenError = shortenUrlActive ? 'Base link is invalid or not generated.' : '';
+			return;
+		}
+
+		if (browser && !navigator.onLine) {
+			shortenError = 'No internet connection. Cannot shorten URL.';
+			shortenUrlActive = false; // Turn off switch
+			return;
+		}
+
+		isShortening = true;
+		shortenError = '';
+		shortenedSuccessUrl = '';
+
+		try {
+			const formData = new URLSearchParams();
+			formData.append('url', baseGeneratedLink);
+
+			const response = await fetch('https://spoo.me/', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/x-www-form-urlencoded',
+					'Accept': 'application/json'
+				},
+				body: formData
+			});
+
+			if (!response.ok) {
+				let errorMsg = `Shorten API error: ${response.status}`;
+				try {
+					const errorData = await response.json();
+					if (errorData && errorData.message) {
+						errorMsg = errorData.message;
+					} else if (response.status === 429) {
+						errorMsg = 'Rate limit exceeded for URL shortener. Please try again later.';
+					}
+				} catch (parseError) { /* ignore */ }
+				throw new Error(errorMsg);
+			}
+
+			const data = await response.json();
+			if (data.short_url) {
+				shortenedSuccessUrl = data.short_url;
+			} else {
+				throw new Error('Failed to retrieve shortened URL from API (invalid response).');
+			}
+		} catch (e: any) {
+			console.error('Error shortening URL with Spoo.me:', e);
+			shortenError = e.message || 'Error shortening URL.';
+			shortenUrlActive = false; // Turn off switch on error
+			shortenedSuccessUrl = '';
+		} finally {
+			isShortening = false;
+		}
+	}
+
+	// When the shortenUrlActive toggle changes to true, attempt to shorten
+	$: if (shortenUrlActive && browser && !isShortening && !shortenedSuccessUrl && baseGeneratedLink && !baseGeneratedLink.startsWith('Error')) {
+		attemptShortenUrl();
+	}
+
+
 	function copyLink() {
-		if (browser && navigator.clipboard && generatedLink && !generatedLink.startsWith('Error')) {
+		if (browser && navigator.clipboard && displayLink && !displayLink.startsWith('Error')) {
 			navigator.clipboard
-				.writeText(generatedLink)
+				.writeText(displayLink)
 				.then(() => {
 					alert('Link copied to clipboard!');
 				})
@@ -126,15 +152,10 @@
 
 	onMount(() => {
 		if (browser) {
-			generateAndMaybeShortenLink(); // Generate link initially
+			regenerateBaseLink(); // Generate base link initially
 		}
 	});
 
-	// Regenerate link when options change
-	// Debounce or make smarter to avoid excessive API calls if user rapidly clicks "shouldShortenUrl"
-	$: if (browser && (markdownInput || isEditable || isShareRtl || shareTheme || shouldShortenUrl)) {
-		generateAndMaybeShortenLink();
-	}
 </script>
 
 <div
@@ -194,24 +215,6 @@
 					{/each}
 				</select>
 			</div>
-
-			<div>
-				<label class="flex items-center space-x-2">
-					<input
-						type="checkbox"
-						bind:checked={shouldShortenUrl}
-						class="form-checkbox h-5 w-5 text-blue-600"
-						disabled={isShortening}
-					/>
-					<span>Shorten Shareable URL</span>
-				</label>
-				{#if shortenUrlError}
-					<p class="ml-7 mt-1 text-sm text-red-600">{shortenUrlError}</p>
-				{/if}
-				{#if isShortening}
-					<p class="ml-7 mt-1 text-sm text-blue-600">Shortening URL...</p>
-				{/if}
-			</div>
 		</div>
 
 		<div class="mb-4">
@@ -221,17 +224,34 @@
 			<textarea
 				id="generatedLinkTextarea"
 				readonly
-				bind:value={generatedLink}
-				class="h-24 w-full resize-none rounded-md border border-gray-300 bg-gray-50 p-2 font-mono text-xs {shortenUrlError ? 'border-red-500' : ''}"
+				bind:value={displayLink}
+				class="h-24 w-full resize-none rounded-md border border-gray-300 bg-gray-50 p-2 font-mono text-xs {shortenError && !shortenUrlActive ? 'border-red-500' : ''}"
 				aria-label="Generated Shareable Link"
-				placeholder={isShortening ? 'Generating link...' : 'Link will appear here...'}
+				placeholder={isShortening ? 'Generating link...' : (baseGeneratedLink || 'Link will appear here...') }
 			></textarea>
 		</div>
-
-		<div class="flex items-center justify-end space-x-3">
-			{#if shortenUrlError && shortenUrlError.includes('Rate limit')}
-				<p class="mr-auto text-xs text-yellow-700">Try again in a minute.</p>
+		
+		<div class="mb-4 space-y-2">
+			<label class="flex cursor-pointer items-center">
+				<div class="relative">
+				  <input type="checkbox" class="sr-only" bind:checked={shortenUrlActive} disabled={isShortening || !baseGeneratedLink || baseGeneratedLink.startsWith('Error')}/>
+				  <div class="block h-6 w-10 rounded-full bg-gray-300 transition"></div>
+				  <div class="dot absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition"></div>
+				</div>
+				<div class="ml-3 text-sm text-gray-700">
+					Shorten URL 
+					<span class="text-xs text-gray-500">({SPOO_ME_API_LIMIT})</span>
+				</div>
+			</label>
+			{#if isShortening}
+				<p class="text-sm text-blue-600">Shortening URL...</p>
 			{/if}
+			{#if shortenError}
+				<p class="text-sm text-red-600">{shortenError}</p>
+			{/if}
+		</div>
+
+		<div class="flex items-center justify-end space-x-3 border-t pt-4 mt-4">
 			<button
 				on:click={() => dispatch('close')}
 				class="rounded bg-gray-200 px-4 py-2 text-gray-800 hover:bg-gray-300"
@@ -241,14 +261,14 @@
 			<button
 				on:click={copyLink}
 				class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-				disabled={!generatedLink || generatedLink.startsWith('Error') || isShortening}
+				disabled={!displayLink || displayLink.startsWith('Error') || isShortening || (shortenUrlActive && !shortenedSuccessUrl)}
 			>
-				{#if isShortening}
+				{#if isShortening && shortenUrlActive}
 					<svg class="mr-2 inline h-4 w-4 animate-spin text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
 						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
 					  </svg>
-					  Copying...
+					Copying...
 				{:else}
 					Copy Link
 				{/if}
@@ -256,4 +276,40 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	/* Basic toggle switch styling */
+	input[type="checkbox"].sr-only:checked + div {
+		background-color: #4f46e5; /* Tailwind indigo-600 */
+	}
+	input[type="checkbox"].sr-only:checked + div + div.dot {
+		transform: translateX(100%);
+		background-color: white;
+	}
+	div.dot {
+		/* Adjust based on block size if needed */
+		width: 1rem; /* h-4 */
+		height: 1rem; /* w-4 */
+		top: 0.125rem; /* top-0.5 approx */
+		left: 0.125rem; /* left-0.5 approx */
+	}
+	div.block {
+		width: 2.5rem; /* w-10 */
+		height: 1.5rem; /* h-6 */
+	}
+
+	/* Disabled state for toggle */
+	input[type="checkbox"].sr-only:disabled + div {
+		background-color: #d1d5db; /* Tailwind gray-300 */
+		cursor: not-allowed;
+	}
+	input[type="checkbox"].sr-only:disabled + div + div.dot {
+		background-color: #9ca3af; /* Tailwind gray-400 */
+	}
+	label.flex.cursor-pointer.items-center input[type="checkbox"].sr-only:disabled ~ .ml-3 {
+		color: #9ca3af; /* Tailwind gray-400 */
+		cursor: not-allowed;
+	}
+
+</style>
  
